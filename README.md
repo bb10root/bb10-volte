@@ -115,9 +115,11 @@ Please refer to the original research for technical background and attribution.
 
 ## 📄 License
 
-Add the applicable license information here if this project is distributed under an open-source license.
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
 
-If portions of the implementation are derived from other projects, ensure that their original licenses and attribution requirements are respected.
+You are free to use, study, modify, and redistribute this software under the terms of the license.
+
+See the [LICENSE](LICENSE) file for the full license text.
 
 ---
 
