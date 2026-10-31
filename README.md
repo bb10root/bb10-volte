@@ -83,6 +83,19 @@ After installation:
 
 **Before installing:** Back up important data and ensure you have a way to recover the device if the addon causes unexpected behavior.
 
+## 📡 Carrier files
+
+`ims_manager` looks up the SIM's carrier ID (MCC/MNC in `/base/etc/carrier/ids/carrierIds.xml`) and uses these files from `/var/addons/volte/data`:
+
+- `carrier-<carrierID>-volte.xml` — the CDS carrier profile with the `ims` service. If no file matches the carrier ID, the first `carrier-*.xml` is used.
+- `ir92-<carrierID>` (optional) — the IR.92 DCA object written to `/var/dca/sources/ims/services/carrier_config/ims/ir92`, replacing the default. It must start with `@ir92`. Networks that answer the INVITE with `Require: precondition` need `UsePreconditions:b:true` here; without it outgoing calls never alert the callee and end with `Ringback timer expired`. `ims_rrm` ignores `UsePreconditions:n:1`.
+
+Add both files to `pkg/data/perms`.
+
+## 🧪 Tests
+
+`make test` builds and runs the host-side unit tests for the carrier helpers with the native compiler and libxml2.
+
 ## ⚠️ Disclaimer
 
 This project is provided for research, experimentation, and preservation of BlackBerry 10 devices.

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include <libxml/parser.h>
 #include <libxml/tree.h>
@@ -97,7 +98,12 @@ static void sax_end_element_cb(void *ctx, const xmlChar *name)
 
 int ims_get_carrier_id(const char *mcc, const char *mnc)
 {
-    if (!mcc || !mnc || mcc[0] == '\0' || mnc[0] == '\0')
+    return ims_get_carrier_id_from(CARRIER_IDS_PATH, mcc, mnc);
+}
+
+int ims_get_carrier_id_from(const char *ids_path, const char *mcc, const char *mnc)
+{
+    if (!ids_path || !mcc || !mnc || mcc[0] == '\0' || mnc[0] == '\0')
         return -1;
 
     carrier_parse_ctx_t ctx;
@@ -115,7 +121,7 @@ int ims_get_carrier_id(const char *mcc, const char *mnc)
 
     xmlInitParser();
 
-    if (xmlSAXUserParseFile(&sax_handler, &ctx, CARRIER_IDS_PATH) < 0)
+    if (xmlSAXUserParseFile(&sax_handler, &ctx, ids_path) < 0)
     {
         return -1;
     }
@@ -197,4 +203,104 @@ int ims_enable_volte_provisioning(const char *xml_path)
     xmlFreeDoc(doc);
 
     return status;
+}
+int ims_find_carrier_profile(const char *data_dir, int carrier_id, char *out_path, size_t max_len)
+{
+    if (!data_dir || !out_path || max_len == 0)
+        return -1;
+
+    if (carrier_id > 0)
+    {
+        snprintf(out_path, max_len, "%s/carrier-%d-volte.xml", data_dir, carrier_id);
+        if (access(out_path, F_OK) == 0)
+            return 0;
+    }
+
+    DIR *dir = opendir(data_dir);
+    if (!dir)
+        return -1;
+
+    struct dirent *ent;
+    int found = -1;
+    while ((ent = readdir(dir)) != NULL)
+    {
+        if (strncmp(ent->d_name, "carrier-", 8) == 0 && strstr(ent->d_name, ".xml"))
+        {
+            snprintf(out_path, max_len, "%s/%s", data_dir, ent->d_name);
+            found = 0;
+            break;
+        }
+    }
+    closedir(dir);
+    return found;
+}
+
+int ims_load_ir92_config(const char *data_dir, int carrier_id, const char *default_cfg,
+                         char *out, size_t max_len)
+{
+    if (!default_cfg || !out || max_len == 0)
+        return -1;
+
+    if (data_dir && carrier_id > 0)
+    {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/ir92-%d", data_dir, carrier_id);
+
+        FILE *f = fopen(path, "r");
+        if (f)
+        {
+            size_t n = fread(out, 1, max_len, f);
+            int too_big = (n == max_len);
+            fclose(f);
+            if (too_big)
+                return -1;
+            out[n] = '\0';
+            if (strncmp(out, "@ir92\n", 6) == 0)
+                return 0;
+        }
+    }
+
+    if (strlen(default_cfg) >= max_len)
+        return -1;
+    strcpy(out, default_cfg);
+    return 0;
+}
+
+static int has_whole_line(const char *text, const char *line, size_t len)
+{
+    const char *p = text;
+    while (*p)
+    {
+        const char *eol = strchr(p, '\n');
+        size_t cur = eol ? (size_t)(eol - p) : strlen(p);
+        if (cur == len && strncmp(p, line, len) == 0)
+            return 1;
+        if (!eol)
+            break;
+        p = eol + 1;
+    }
+    return 0;
+}
+
+int ims_ir92_applied(const char *actual, const char *expected)
+{
+    if (!actual || !expected || actual[0] == '\0')
+        return 0;
+
+    const char *p = strchr(expected, '\n');
+    if (!p)
+        return 0;
+    p++;
+
+    while (*p)
+    {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        if (len > 0 && !has_whole_line(actual, p, len))
+            return 0;
+        if (!eol)
+            break;
+        p = eol + 1;
+    }
+    return 1;
 }
