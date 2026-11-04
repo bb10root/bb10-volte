@@ -30,6 +30,10 @@
 #define MAX_BACKOFF_SEC 64
 #define MAX_RETRY_ATTEMPTS 6
 
+#define IMS_CHECK_INTERVAL_SEC 10
+#define IMS_DOWN_GRACE_SEC 60     /* Tolerated re-registration time before restarting IMS */
+#define IMS_RETRY_INTERVAL_SEC 300 /* Wait after a reconnect sequence gives up */
+
 enum
 {
     FD_RADIO = 0,
@@ -563,8 +567,77 @@ static int reconnect_ims_with_backoff(void)
     }
 
     log_msg("[BBE] RECONNECT_GAVE_UP");
-    LOG_VERBOSE("Exceeded maximum reconnect attempts. Waiting for next system state event.");
+    LOG_VERBOSE("Exceeded maximum reconnect attempts. Retrying in %d seconds.", IMS_RETRY_INTERVAL_SEC);
     return 0;
+}
+
+/* --- IMS Health Check --- */
+
+static time_t monotonic_sec(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec;
+}
+
+/* ims_rrm is checked too: a crashed process leaves its last PPS status behind. */
+static int ims_healthy(void)
+{
+    return find_pid_by_name("ims_rrm", 0) > 0 && ims_connected_pps() && incoming_ready_pps();
+}
+
+/* LTE, SIM and data can all stay up while IMS dies or loses registration. */
+static void check_ims_health(int *was_ready)
+{
+    static time_t last_check = 0;
+    static time_t down_since = 0;
+    static int retry_wait = IMS_DOWN_GRACE_SEC;
+
+    if (!is_state_ready(&g_current_state))
+    {
+        down_since = 0; /* The state-change path owns IMS while conditions are lost. */
+        retry_wait = IMS_DOWN_GRACE_SEC;
+        return;
+    }
+
+    time_t now = monotonic_sec();
+    if (last_check != 0 && now - last_check < IMS_CHECK_INTERVAL_SEC)
+        return;
+    last_check = now;
+
+    if (ims_healthy())
+    {
+        *was_ready = 1;
+        down_since = 0;
+        retry_wait = IMS_DOWN_GRACE_SEC;
+    }
+    else if (down_since == 0)
+    {
+        down_since = now;
+    }
+    else if (now - down_since >= retry_wait)
+    {
+        if (*was_ready)
+        {
+            log_msg("[BBE] DROPPED: IMS_LOST");
+            stats_on_drop();
+        }
+
+        if (reconnect_ims_with_backoff())
+        {
+            stats_on_success();
+            *was_ready = 1;
+            down_since = 0;
+            retry_wait = IMS_DOWN_GRACE_SEC;
+        }
+        else
+        {
+            stats_on_failure();
+            *was_ready = 0;
+            down_since = monotonic_sec();
+            retry_wait = IMS_RETRY_INTERVAL_SEC;
+        }
+    }
 }
 
 /* --- Background Multi-PPS Monitor Thread --- */
@@ -592,6 +665,10 @@ static void *detailed_pps_monitor_thread(void *arg)
     g_current_state = get_current_system_state();
     int was_ready = is_state_ready(&g_current_state);
 
+    /* No drop will be recorded for this outage, so time recovery from here. */
+    if (!was_ready)
+        clock_gettime(CLOCK_MONOTONIC, &g_stats.drop_time);
+
     LOG_VERBOSE("Detailed PPS monitor started. Initial state -> LTE:%d, SIM:%d, Data:%d",
                 g_current_state.lte_ok, g_current_state.sim_ok, g_current_state.data_ok);
 
@@ -603,6 +680,8 @@ static void *detailed_pps_monitor_thread(void *arg)
             stats_reset();
             stats_export_to_file();
         }
+
+        check_ims_health(&was_ready);
 
         int poll_res = poll(pfds, FD_COUNT, 1000);
 
