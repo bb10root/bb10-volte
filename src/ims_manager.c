@@ -307,15 +307,23 @@ static int detect_sim_carrier(void)
     return 0;
 }
 
-/* Returns 1 only if a carrier XML shipped for this SIM's carrier ID exists. */
+/* Prefers the XML for this SIM's carrier ID, then the optional default XML. */
 static int find_carrier_xml(char *out_path, size_t max_len)
 {
     int carrier_id = ims_get_carrier_id(g_mcc, g_mnc);
-    if (carrier_id <= 0)
+    if (carrier_id > 0)
+    {
+        snprintf(out_path, max_len, "%s/carrier-%d-volte.xml", g_data_path, carrier_id);
+        if (access(out_path, R_OK) == 0)
+            return 1;
+    }
+
+    snprintf(out_path, max_len, "%s/carrier-default-volte.xml", g_data_path);
+    if (access(out_path, R_OK) != 0)
         return 0;
 
-    snprintf(out_path, max_len, "%s/carrier-%d-volte.xml", g_data_path, carrier_id);
-    return access(out_path, R_OK) == 0;
+    log_msg("[BBE] CARRIER_XML_FALLBACK: mcc=%s mnc=%s", g_mcc, g_mnc);
+    return 1;
 }
 
 static void wait_for_lte(void)

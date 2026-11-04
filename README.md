@@ -45,6 +45,18 @@ Even if LTE data works correctly, voice over LTE may not work unless the carrier
 
 Compatibility should be verified on each target device and network.
 
+### Carriers without a configuration
+
+The addon uses `pkg/data/carrier-<carrier_id>-volte.xml`, where the ID comes from the SIM's MCC/MNC. If the SIM has no carrier ID, or no file exists for it, the addon uses `pkg/data/carrier-default-volte.xml` when present. Without that file, it publishes no carrier configuration.
+
+To add a fallback, create that file and add this line to `pkg/data/perms`:
+
+```text
+carrier-default-volte.xml:0:0:644
+```
+
+The file also sets the internet and MMS APNs, so a wrong value can break mobile data.
+
 ## 🚀 Installation
 
 ### 1. Download the addon
