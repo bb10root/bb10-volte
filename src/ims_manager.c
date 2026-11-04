@@ -3,7 +3,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
-#include <dirent.h>
 #include <getopt.h>
 #include <spawn.h>
 #include <fcntl.h>
@@ -297,24 +296,15 @@ static int detect_sim_carrier(void)
     return 0;
 }
 
-static void find_carrier_xml(char *out_path, size_t max_len)
+/* Returns 1 only if a carrier XML shipped for this SIM's carrier ID exists. */
+static int find_carrier_xml(char *out_path, size_t max_len)
 {
-    DIR *dir = opendir(g_data_path);
-    if (dir)
-    {
-        struct dirent *ent;
-        while ((ent = readdir(dir)) != NULL)
-        {
-            if (strncmp(ent->d_name, "carrier-", 8) == 0 && strstr(ent->d_name, ".xml"))
-            {
-                snprintf(out_path, max_len, "%s/%s", g_data_path, ent->d_name);
-                closedir(dir);
-                return;
-            }
-        }
-        closedir(dir);
-    }
-    snprintf(out_path, max_len, "%s/carrier-%s-volte.xml", g_data_path, g_mnc);
+    int carrier_id = ims_get_carrier_id(g_mcc, g_mnc);
+    if (carrier_id <= 0)
+        return 0;
+
+    snprintf(out_path, max_len, "%s/carrier-%d-volte.xml", g_data_path, carrier_id);
+    return access(out_path, R_OK) == 0;
 }
 
 static void wait_for_lte(void)
@@ -859,13 +849,19 @@ int main(int argc, char *argv[])
     }
 
     char carrier_xml[512];
-    find_carrier_xml(carrier_xml, sizeof(carrier_xml));
-    chmod(carrier_xml, 0644);
-    LOG_VERBOSE("Carrier XML resolved to: %s", carrier_xml);
+    if (find_carrier_xml(carrier_xml, sizeof(carrier_xml)))
+    {
+        chmod(carrier_xml, 0644);
+        LOG_VERBOSE("Carrier XML resolved to: %s", carrier_xml);
 
-    char cmd_buf[512];
-    snprintf(cmd_buf, sizeof(cmd_buf), "cdsc_xml::%s\n", carrier_xml);
-    append_file("/pps/services/cds/cnice/status_persistent", cmd_buf);
+        char cmd_buf[512];
+        snprintf(cmd_buf, sizeof(cmd_buf), "cdsc_xml::%s\n", carrier_xml);
+        append_file("/pps/services/cds/cnice/status_persistent", cmd_buf);
+    }
+    else
+    {
+        log_msg("[BBE] CARRIER_XML_NOT_FOUND: mcc=%s mnc=%s", g_mcc, g_mnc);
+    }
     append_file("/pps/services/escreens/config", "voice_domain_preference_EUTRAN_override::5\n");
 
     LOG_VERBOSE("Restarting IMS and starting berry monitor thread...");
