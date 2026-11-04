@@ -139,6 +139,7 @@ static void *berry_monitor_thread(void *arg)
     if (lockfd < 0)
     {
         log_msg("[BBE] indicator lock error");
+        g_berry_running = 0;
         return NULL;
     }
 
@@ -150,10 +151,10 @@ static void *berry_monitor_thread(void *arg)
     {
         log_msg("[BBE] indicator monitor already running in background (lock busy)");
         close(lockfd);
+        g_berry_running = 0;
         return NULL;
     }
 
-    g_berry_running = 1;
     log_msg("[BBE] VoLTE berry monitor thread started (PPS ?delta mode)");
 
     while (g_berry_running)
@@ -234,8 +235,11 @@ void start_berry(void)
     if (!g_berry_running)
     {
         mkdir_p(RUN_PATH, 0755);
+        /* Set before the thread exists: main exits as soon as it reads 0. */
+        g_berry_running = 1;
         if (pthread_create(&g_berry_thread, NULL, berry_monitor_thread, NULL) != 0)
         {
+            g_berry_running = 0;
             LOG_VERBOSE("Failed to start berry monitor thread");
         }
     }
