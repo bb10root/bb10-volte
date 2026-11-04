@@ -453,7 +453,14 @@ static void apply_volte_provisioning(void)
         }
     }
 
-    ims_enable_volte_provisioning(g_ims_xml_path);
+    /* Not fatal: the registration and incoming checks decide the outcome. */
+    if (ims_enable_volte_provisioning(g_ims_xml_path) != 0)
+    {
+        log_msg("[BBE] PROVISIONING_FAILED: %s", g_ims_xml_path);
+        return;
+    }
+
+    LOG_VERBOSE("VoLTE provisioning applied via XML: %s", g_ims_xml_path);
 }
 
 static void write_dca_configs(void)
@@ -959,7 +966,6 @@ int main(int argc, char *argv[])
     LOG_VERBOSE("DCA configs written");
 
     apply_volte_provisioning();
-    LOG_VERBOSE("VoLTE provisioning applied via XML");
 
     char log_file[512];
     snprintf(log_file, sizeof(log_file), "%s/dca-enable.log", RUN_PATH);
