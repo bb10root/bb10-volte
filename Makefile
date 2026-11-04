@@ -23,7 +23,7 @@ OBJS_SO   := $(SRCS_SO:.c=.o)
 DEPS      := $(OBJS_BIN:.o=.d) $(OBJS_SO:.o=.d)
 
 # Base CFlags and LDFLags
-CFLAGS    := -std=gnu99 -Isrc/include -MMD -MP
+CFLAGS    := -std=gnu99 -MMD -MP
 LDFLAGS   := -lxml2 -lpps -lslog2
 
 # Build mode toggle: DEBUG=1 vs Release (default)

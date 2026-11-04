@@ -53,3 +53,7 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Build outputs
+/pkg/init/ims_manager
+/volte.zip
