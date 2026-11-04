@@ -238,8 +238,11 @@ int run_cmd_spawn(char *const argv[], const char *log_path)
     if (status != 0)
         return -1;
 
-    if (waitpid(pid, &status, 0) == -1)
-        return -1;
+    while (waitpid(pid, &status, 0) == -1)
+    {
+        if (errno != EINTR)
+            return -1;
+    }
 
     return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }

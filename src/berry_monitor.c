@@ -154,11 +154,12 @@ static void *berry_monitor_thread(void *arg)
     }
 
     g_berry_running = 1;
-    log_msg("[BBE] VoLTE berry monitor thread started (PPS ?wait,delta mode)");
+    log_msg("[BBE] VoLTE berry monitor thread started (PPS ?delta mode)");
 
     while (g_berry_running)
     {
-        int pps_fd = open(PPS_IMS "?wait,delta", O_RDONLY | O_CLOEXEC);
+        /* Non-blocking: poll()'s timeout must bound how long stop_berry() waits. */
+        int pps_fd = open(PPS_IMS "?delta", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if (pps_fd < 0)
         {
             if (!warned)

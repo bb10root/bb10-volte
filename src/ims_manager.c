@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
 #include <getopt.h>
 #include <spawn.h>
 #include <fcntl.h>
@@ -62,6 +63,12 @@ static pthread_t g_lte_thread;
 static volatile int g_lte_monitor_running = 0;
 static system_state_t g_current_state = {0};
 static connection_stats_t g_stats = {0};
+
+/* Set by signal handlers, acted on by the main and monitor threads. */
+static volatile sig_atomic_t g_stop_requested = 0;
+static volatile sig_atomic_t g_reset_stats_requested = 0;
+
+static void exit_if_stopped(void);
 
 /* --- Statistics Management --- */
 
@@ -318,6 +325,7 @@ static void wait_for_lte(void)
             log_msg("[BBE] WAITING_FOR_LTE");
             printed_log = 1;
         }
+        exit_if_stopped();
         sleep(3);
     }
 
@@ -487,6 +495,8 @@ static int wait_connected(void)
     {
         if (ims_connected_pps())
             return 1;
+        if (g_stop_requested)
+            return 0;
         if (i % 5 == 0)
         {
             log_msg("[BBE] WAITING:%d", i * 2);
@@ -587,10 +597,21 @@ static void *detailed_pps_monitor_thread(void *arg)
 
     while (g_lte_monitor_running)
     {
+        if (g_reset_stats_requested)
+        {
+            g_reset_stats_requested = 0;
+            stats_reset();
+            stats_export_to_file();
+        }
+
         int poll_res = poll(pfds, FD_COUNT, 1000);
 
         if (poll_res < 0)
+        {
+            if (errno == EINTR)
+                continue;
             break;
+        }
         if (poll_res == 0)
             continue;
 
@@ -666,21 +687,41 @@ static void stop_lte_monitor(void)
     }
 }
 
+/* Main thread only: joins the worker threads. */
+static void exit_if_stopped(void)
+{
+    if (g_stop_requested)
+    {
+        stop_lte_monitor();
+        stop_berry();
+        exit(0);
+    }
+}
+
+static int run_until_stopped(void)
+{
+    while (g_berry_running && !g_stop_requested)
+    {
+        sleep(1);
+    }
+
+    stop_lte_monitor();
+    stop_berry();
+    return 0;
+}
+
 /* --- Signal Handlers & Usage --- */
 
 static void sigusr1_handler(int sig)
 {
     (void)sig;
-    stats_reset();
-    stats_export_to_file();
+    g_reset_stats_requested = 1;
 }
 
 static void signal_handler(int sig)
 {
     (void)sig;
-    stop_lte_monitor();
-    stop_berry();
-    exit(0);
+    g_stop_requested = 1;
 }
 
 static void print_usage(const char *prog_name)
@@ -818,13 +859,7 @@ int main(int argc, char *argv[])
         start_lte_monitor();
         log_msg("[BBE] ALREADY_CONNECTED");
 
-        while (g_berry_running)
-        {
-            sleep(1);
-        }
-
-        stop_lte_monitor();
-        return 0;
+        return run_until_stopped();
     }
 
     log_msg("[BBE] APPLYING");
@@ -870,7 +905,10 @@ int main(int argc, char *argv[])
     start_berry();
 
     if (!wait_connected())
+    {
+        exit_if_stopped();
         bbe_exit_fail("REGISTER_TIMEOUT", 1);
+    }
 
     if (!incoming_ready_pps())
     {
@@ -880,7 +918,10 @@ int main(int argc, char *argv[])
         apply_volte_provisioning();
         start_ims();
         if (!wait_connected())
+        {
+            exit_if_stopped();
             bbe_exit_fail("REGISTER_TIMEOUT", 1);
+        }
     }
 
     if (!incoming_ready_pps())
@@ -891,11 +932,5 @@ int main(int argc, char *argv[])
     /* Start background monitoring thread after initial successful connection */
     start_lte_monitor();
 
-    while (g_berry_running)
-    {
-        sleep(1);
-    }
-
-    stop_lte_monitor();
-    return 0;
+    return run_until_stopped();
 }
