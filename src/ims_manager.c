@@ -817,6 +817,21 @@ static void print_usage(const char *prog_name)
     printf("  -h, --help                          Show this help message\n");
 }
 
+/* A running daemon owns the counters and would overwrite a reset done here. */
+static void reset_stats_cli(void)
+{
+    int daemon_pid = berry_daemon_pid();
+    if (daemon_pid > 0 && kill(daemon_pid, SIGUSR1) == 0)
+    {
+        printf("[BBE] Statistics reset requested from daemon PID %d.\n", daemon_pid);
+        return;
+    }
+
+    stats_reset();
+    stats_export_to_file();
+    printf("[BBE] Statistics reset successfully.\n");
+}
+
 /* --- Main Entry Point --- */
 
 int main(int argc, char *argv[])
@@ -884,9 +899,7 @@ int main(int argc, char *argv[])
                 stats_print_cli();
                 return 0;
             case 1004:
-                stats_reset();
-                stats_export_to_file();
-                printf("[BBE] Statistics reset successfully.\n");
+                reset_stats_cli();
                 return 0;
             case 'h':
                 print_usage(argv[0]);
@@ -915,7 +928,7 @@ int main(int argc, char *argv[])
             log_msg("[BBE] SIM_LTE_OK");
         }
         log_msg("[BBE] %s", ims_connected_pps() ? "CONNECTED" : "NOT_CONNECTED");
-        log_msg("[BBE] %s", g_berry_running ? "BERRY_RUNNING" : "BERRY_STOPPED");
+        log_msg("[BBE] %s", berry_daemon_pid() > 0 ? "BERRY_RUNNING" : "BERRY_STOPPED");
         log_msg("[BBE] %s", incoming_ready_pps() ? "INCOMING_READY" : "INCOMING_NOT_READY");
         return 0;
     }

@@ -230,6 +230,23 @@ static void *berry_monitor_thread(void *arg)
     return NULL;
 }
 
+/* Do not call from the daemon: closing this fd would drop its own lock. */
+int berry_daemon_pid(void)
+{
+    int fd = open(BERRY_LOCK, O_RDWR | O_CLOEXEC);
+    if (fd < 0)
+        return 0;
+
+    struct flock lock;
+    memset(&lock, 0, sizeof(lock));
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+
+    int pid = (fcntl(fd, F_GETLK, &lock) == 0 && lock.l_type != F_UNLCK) ? (int)lock.l_pid : 0;
+    close(fd);
+    return pid;
+}
+
 void start_berry(void)
 {
     if (!g_berry_running)

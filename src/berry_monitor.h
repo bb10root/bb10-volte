@@ -12,6 +12,7 @@ extern volatile sig_atomic_t g_berry_running;
 int parse_ims_pps_buffer(char *buf);
 int ims_connected_pps(void);
 int icon_state(char *buf);
+int berry_daemon_pid(void);
 
 void start_berry(void);
 void stop_berry(void);
