@@ -25,6 +25,7 @@
 #define PPS_RADIO_PATH "/pps/services/cellular/radioctrl/status_public"
 #define PPS_UICC_PATH "/pps/services/cellular/uicc/card0/status_private"
 #define PPS_DATA_PATH "/pps/services/cds/cnice/status_persistent"
+#define PPS_RADIO_CONTROL_PATH "/pps/services/cellular/radioctrl/control"
 
 #define INITIAL_BACKOFF_SEC 2
 #define MAX_BACKOFF_SEC 64
@@ -33,6 +34,12 @@
 #define IMS_CHECK_INTERVAL_SEC 10
 #define IMS_DOWN_GRACE_SEC 60     /* Tolerated re-registration time before restarting IMS */
 #define IMS_RETRY_INTERVAL_SEC 300 /* Wait after a reconnect sequence gives up */
+#define REGISTER_WAIT_SEC 180      /* ims_rrm tries the next P-CSCF only after 128 s */
+#define RADIO_RESET_MIN_INTERVAL_SEC 1800
+
+/* network_service bits, as tested by ims_rrm and named by cellular-control */
+#define NET_SERVICE_DATA_LTE 0x200000UL
+#define NET_SERVICE_IMS_VOICE 0x2000000UL
 
 enum
 {
@@ -62,6 +69,7 @@ typedef struct
 static char g_mcc[4] = {0};
 static char g_mnc[4] = {0};
 static char g_ims_xml_path[256] = {0};
+static int g_force_ims_voice = 0;
 
 static pthread_t g_lte_thread;
 static volatile int g_lte_monitor_running = 0;
@@ -326,6 +334,34 @@ static int find_carrier_xml(char *out_path, size_t max_len)
     return 1;
 }
 
+static void publish_carrier_xml(const char *carrier_xml)
+{
+    char cmd_buf[576];
+
+    chmod(carrier_xml, 0644);
+    LOG_VERBOSE("Carrier XML resolved to: %s", carrier_xml);
+
+    snprintf(cmd_buf, sizeof(cmd_buf), "cdsc_xml::%s\n", carrier_xml);
+    append_file(PPS_DATA_PATH, cmd_buf);
+}
+
+/* A wrong published XML can keep LTE down, so replacing it can't wait for LTE. */
+static void fix_published_carrier_xml(void)
+{
+    char carrier_xml[512];
+    char status[4096];
+
+    if (pps_check_attribute_contains(PPS_RADIO_PATH, "network_technology", "lte") ||
+        !find_carrier_xml(carrier_xml, sizeof(carrier_xml)) ||
+        (read_file(PPS_DATA_PATH, status, sizeof(status)) >= 0 && strstr(status, carrier_xml)))
+    {
+        return;
+    }
+
+    log_msg("[BBE] CARRIER_XML_REPLACED: %s", carrier_xml);
+    publish_carrier_xml(carrier_xml);
+}
+
 static void wait_for_lte(void)
 {
     int printed_log = 0;
@@ -392,6 +428,7 @@ static void wait_until_ready(void)
         sleep(3);
     }
 
+    fix_published_carrier_xml();
     wait_for_lte();
 }
 
@@ -540,7 +577,7 @@ static void write_dca_configs(void)
 
 static int wait_connected(void)
 {
-    for (int i = 0; i < 30; i++)
+    for (int i = 0; i < REGISTER_WAIT_SEC / 2; i++)
     {
         if (ims_connected_pps())
             return 1;
@@ -566,6 +603,48 @@ static int run_berry_check(void)
 
 /* --- Reconnection Logic with Exponential Backoff --- */
 
+static time_t monotonic_sec(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec;
+}
+
+static void set_radio_power(const char *state)
+{
+    char cmd[96];
+    snprintf(cmd, sizeof(cmd), "msg::power\nid::1\ndat:json:{\"state\":\"%s\"}\n", state);
+    append_file(PPS_RADIO_CONTROL_PATH, cmd);
+}
+
+/* A connection rejected on 2G stays stalled after LTE returns, and restarting
+ * ims_rrm can't clear it. Cycling the radio does, as airplane mode would. */
+static void reset_radio_if_stalled(void)
+{
+    static time_t last_reset = 0;
+    time_t now = monotonic_sec();
+
+    if (!pps_check_attribute_contains(PPS_IMS, "status", "idle") ||
+        !pps_check_attribute_contains("/pps/services/phone/public/status", "phone_state", "idle") ||
+        (last_reset != 0 && now - last_reset < RADIO_RESET_MIN_INTERVAL_SEC))
+    {
+        return;
+    }
+
+    last_reset = now;
+    log_msg("[BBE] RADIO_RESET: IMS connection stalled");
+    set_radio_power("OFF");
+    sleep(5);
+    set_radio_power("ON");
+
+    for (int i = 0; i < 30 && g_lte_monitor_running; i++)
+    {
+        if (pps_check_attribute_contains(PPS_RADIO_PATH, "network_technology", "lte"))
+            break;
+        sleep(2);
+    }
+}
+
 static int reconnect_ims_with_backoff(void)
 {
     int attempt = 1;
@@ -587,12 +666,14 @@ static int reconnect_ims_with_backoff(void)
         apply_volte_provisioning();
         start_ims();
 
-        if (wait_connected() && incoming_ready_pps())
+        if (wait_connected())
         {
             log_msg("[BBE] CONNECTED");
             LOG_VERBOSE("IMS successfully connected on attempt %d", attempt);
             return 1;
         }
+
+        reset_radio_if_stalled();
 
         log_msg("[BBE] RECONNECT_FAILED_WAITING:%ds", backoff);
         LOG_VERBOSE("Reconnect attempt %d failed. Retrying in %d seconds...", attempt, backoff);
@@ -618,17 +699,12 @@ static int reconnect_ims_with_backoff(void)
 
 /* --- IMS Health Check --- */
 
-static time_t monotonic_sec(void)
-{
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return now.tv_sec;
-}
-
-/* ims_rrm is checked too: a crashed process leaves its last PPS status behind. */
+/* ims_rrm is checked too: a crashed process leaves its last PPS status behind.
+ * Incoming readiness is not: without an imsconfig file it never becomes ready,
+ * and restarting IMS would only drop a working registration. */
 static int ims_healthy(void)
 {
-    return find_pid_by_name("ims_rrm", 0) > 0 && ims_connected_pps() && incoming_ready_pps();
+    return find_pid_by_name("ims_rrm", 0) > 0 && ims_connected_pps();
 }
 
 /* LTE, SIM and data can all stay up while IMS dies or loses registration. */
@@ -685,6 +761,78 @@ static void check_ims_health(int *was_ready)
     }
 }
 
+/* --- Forced IMS voice (opt-in) --- */
+
+/* ims_rrm refuses IMS calls without this bit. Some networks serve them anyway. */
+static unsigned long next_network_service(unsigned long service, int ims_up)
+{
+    if (ims_up && (service & NET_SERVICE_DATA_LTE))
+        return service | NET_SERVICE_IMS_VOICE;
+
+    return service & ~NET_SERVICE_IMS_VOICE;
+}
+
+/* cellular-control overwrites the bit whenever it republishes, so this keeps
+ * reapplying it. Clearing it when IMS is down lets calls fall back to CS.
+ * ponytail: read then write can briefly republish an old mask; the next change
+ * from cellular-control corrects it. */
+static void sync_voice_flag(int allowed)
+{
+    static int logged = -1;
+    char buf[2048];
+
+    if (!g_force_ims_voice || read_file(PPS_RADIO_PATH, buf, sizeof(buf)) < 0)
+        return;
+
+    const char *key = "network_service:n:";
+    const char *pos = strstr(buf, key);
+    if (!pos)
+        return;
+
+    unsigned long service = strtoul(pos + strlen(key), NULL, 10);
+    unsigned long next = next_network_service(service, allowed && g_current_state.lte_ok && ims_connected_pps());
+    if (next != service)
+    {
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "[n]network_service:n:%lu\n", next);
+        append_file(PPS_RADIO_PATH, cmd);
+    }
+
+    int on = (next & NET_SERVICE_IMS_VOICE) != 0;
+    if (on != logged)
+    {
+        log_msg("[BBE] IMS_VOICE_FLAG: %s", on ? "ON" : "OFF");
+        logged = on;
+    }
+}
+
+static int voice_flag_self_test(void)
+{
+    const struct
+    {
+        unsigned long service;
+        int ims_up;
+        unsigned long want;
+    } cases[] = {
+        {0x20040AUL, 1, 0x220040AUL}, /* LTE, IMS up: set */
+        {0x220040AUL, 1, 0x220040AUL}, /* Already set: unchanged */
+        {0x220040AUL, 0, 0x20040AUL}, /* IMS down: clear for CS fallback */
+        {0x2002UL, 1, 0x2002UL},      /* GSM: never set */
+        {0x2002002UL, 1, 0x2002UL}};  /* Left over on GSM: clear */
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        if (next_network_service(cases[i].service, cases[i].ims_up) != cases[i].want)
+        {
+            fprintf(stderr, "[BBE] voice flag self-test %zu failed\n", i);
+            return 1;
+        }
+    }
+
+    puts("[BBE] Voice flag: 5 cases passed");
+    return 0;
+}
+
 /* --- Background Multi-PPS Monitor Thread --- */
 
 static void *detailed_pps_monitor_thread(void *arg)
@@ -717,6 +865,10 @@ static void *detailed_pps_monitor_thread(void *arg)
     LOG_VERBOSE("Detailed PPS monitor started. Initial state -> LTE:%d, SIM:%d, Data:%d",
                 g_current_state.lte_ok, g_current_state.sim_ok, g_current_state.data_ok);
 
+    char force_path[512];
+    snprintf(force_path, sizeof(force_path), "%s/force-ims-voice", g_data_path);
+    g_force_ims_voice = access(force_path, F_OK) == 0;
+
     while (g_lte_monitor_running)
     {
         if (g_reset_stats_requested)
@@ -726,6 +878,7 @@ static void *detailed_pps_monitor_thread(void *arg)
             stats_export_to_file();
         }
 
+        sync_voice_flag(1);
         check_ims_health(&was_ready);
 
         int poll_res = poll(pfds, FD_COUNT, 1000);
@@ -784,6 +937,8 @@ static void *detailed_pps_monitor_thread(void *arg)
             g_current_state = new_state;
         }
     }
+
+    sync_voice_flag(0);
 
     for (int i = 0; i < FD_COUNT; i++)
     {
@@ -937,7 +1092,7 @@ int main(int argc, char *argv[])
                 g_verbose = 1;
                 break;
             case 1001:
-                return self_test();
+                return self_test() || voice_flag_self_test();
             case 1002:
                 return run_berry_check();
             case 1003:
@@ -1022,12 +1177,7 @@ int main(int argc, char *argv[])
     char carrier_xml[512];
     if (find_carrier_xml(carrier_xml, sizeof(carrier_xml)))
     {
-        chmod(carrier_xml, 0644);
-        LOG_VERBOSE("Carrier XML resolved to: %s", carrier_xml);
-
-        char cmd_buf[512];
-        snprintf(cmd_buf, sizeof(cmd_buf), "cdsc_xml::%s\n", carrier_xml);
-        append_file("/pps/services/cds/cnice/status_persistent", cmd_buf);
+        publish_carrier_xml(carrier_xml);
     }
     else
     {
@@ -1054,9 +1204,11 @@ int main(int argc, char *argv[])
         exit_if_stopped();
     }
 
-    if (connected && incoming_ready_pps())
+    if (connected)
     {
         log_msg("[BBE] CONNECTED");
+        if (!incoming_ready_pps())
+            log_msg("[BBE] INCOMING_NOT_READY");
     }
     else
     {

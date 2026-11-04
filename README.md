@@ -57,6 +57,16 @@ carrier-default-volte.xml:0:0:644
 
 The file also sets the internet and MMS APNs, so a wrong value can break mobile data.
 
+### Forcing IMS voice (experimental)
+
+Some networks register the device but report no IMS voice support, so calls fall back to 2G/3G. If your network does accept the calls, the addon can make outgoing calls use VoLTE anyway: add an empty `pkg/data/force-ims-voice` file and list it in `pkg/data/perms`:
+
+```text
+force-ims-voice:0:0:644
+```
+
+While IMS is registered on LTE, the daemon then sets the `IMS_VOICE_SUPPORTED` bit that `ims_rrm` checks. Only use this if you have tested it on your network: if the network refuses these calls, they may fail instead of falling back. Incoming calls are still routed by the network, so they may keep using 2G/3G. Delete the file from `data/` on the device to turn this off, because reinstalling does not remove it.
+
 ## 🚀 Installation
 
 ### 1. Download the addon
@@ -82,6 +92,13 @@ Execute the AutoRoot installer with the path to the ZIP archive:
 ```
 
 Replace `/path/to/volte.zip` with the actual path to the transferred archive.
+
+When upgrading, stop the daemon first and wait until it has exited. Otherwise the installer can report success without replacing the binary:
+
+```bash
+slay ims_manager
+pidin arg | grep '[i]ms_manager'   # repeat until this prints nothing
+```
 
 ### 5. Verify functionality
 
