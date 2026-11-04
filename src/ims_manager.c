@@ -114,7 +114,7 @@ void stats_print_cli(void)
     FILE *f = fopen(STATS_FILE_PATH, "r");
     if (f)
     {
-        char ch;
+        int ch;
         while ((ch = fgetc(f)) != EOF)
         {
             putchar(ch);
