@@ -340,21 +340,51 @@ static void wait_for_lte(void)
     }
 }
 
-static void ready_check(void)
+/* Returns the first unmet precondition other than LTE, or NULL. */
+static const char *ready_failure(void)
 {
     if (!pps_check_attribute_contains("/pps/services/phone/public/status", "phone_state", "idle"))
-        bbe_exit_fail("CALL_ACTIVE", 1);
+        return "CALL_ACTIVE";
 
     if (!pps_check_attribute_contains(PPS_UICC_PATH, "uicc_state", "READY"))
-        bbe_exit_fail("SIM_NOT_READY", 1);
+        return "SIM_NOT_READY";
 
     if (!detect_sim_carrier())
-        bbe_exit_fail("SIM_UNSUPPORTED", 1);
-
-    wait_for_lte();
+        return "SIM_UNSUPPORTED";
 
     if (!pps_check_attribute_contains(PPS_DATA_PATH, "data_service_mode", "ON"))
-        bbe_exit_fail("DATA_OFF", 1);
+        return "DATA_OFF";
+
+    return NULL;
+}
+
+static void ready_check(void)
+{
+    const char *failure = ready_failure();
+    if (failure)
+        bbe_exit_fail(failure, 1);
+
+    wait_for_lte();
+}
+
+/* Started at boot with nobody to retry: the SIM or data may just not be up yet. */
+static void wait_until_ready(void)
+{
+    const char *failure;
+    const char *logged = NULL;
+
+    while ((failure = ready_failure()) != NULL)
+    {
+        if (failure != logged)
+        {
+            log_msg("[BBE] NOT_READY: %s", failure);
+            logged = failure;
+        }
+        exit_if_stopped();
+        sleep(3);
+    }
+
+    wait_for_lte();
 }
 
 /* --- Provider & IMS control --- */
@@ -670,7 +700,7 @@ static void *detailed_pps_monitor_thread(void *arg)
     }
 
     g_current_state = get_current_system_state();
-    int was_ready = is_state_ready(&g_current_state);
+    int was_ready = is_state_ready(&g_current_state) && ims_connected_pps();
 
     /* No drop will be recorded for this outage, so time recovery from here. */
     if (!was_ready)
@@ -945,7 +975,7 @@ int main(int argc, char *argv[])
         bbe_exit_fail("ACTION_INVALID", 1);
     }
 
-    ready_check();
+    wait_until_ready();
     LOG_VERBOSE("Ready check passed successfully");
 
     provider_enable();
@@ -1002,32 +1032,30 @@ int main(int argc, char *argv[])
     start_ims();
     start_berry();
 
-    if (!wait_connected())
-    {
-        exit_if_stopped();
-        bbe_exit_fail("REGISTER_TIMEOUT", 1);
-    }
+    int connected = wait_connected();
+    exit_if_stopped();
 
-    if (!incoming_ready_pps())
+    if (connected && !incoming_ready_pps())
     {
         LOG_VERBOSE("Incoming state not ready after first attempt, retrying...");
         log_msg("[BBE] INCOMING_RETRY");
         stop_ims();
         apply_volte_provisioning();
         start_ims();
-        if (!wait_connected())
-        {
-            exit_if_stopped();
-            bbe_exit_fail("REGISTER_TIMEOUT", 1);
-        }
+        connected = wait_connected();
+        exit_if_stopped();
     }
 
-    if (!incoming_ready_pps())
-        bbe_exit_fail("INCOMING_FAILED", 1);
+    if (connected && incoming_ready_pps())
+    {
+        log_msg("[BBE] CONNECTED");
+    }
+    else
+    {
+        log_msg("[BBE] NOT_CONNECTED: monitor will retry");
+    }
 
-    log_msg("[BBE] CONNECTED");
-
-    /* Start background monitoring thread after initial successful connection */
+    /* The monitor also retries when the first registration did not succeed. */
     start_lte_monitor();
 
     return run_until_stopped();
