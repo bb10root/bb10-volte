@@ -91,7 +91,7 @@ static int set_icon(int on)
     static const char yes[] = "[n]dat:json:{\"bb_service\":{\"state\":\"on\"}}\n";
     static const char no[] = "[n]dat:json:{\"bb_service\":{\"state\":\"off\"}}\n";
     const char *s = on ? yes : no;
-    size_t n = sizeof(yes) - 1;
+    size_t n = strlen(s);
 
     int fd = open(PPS_ICON, O_WRONLY | O_CLOEXEC);
     if (fd < 0)
