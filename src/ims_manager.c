@@ -1193,7 +1193,8 @@ int main(int argc, char *argv[])
     int connected = wait_connected();
     exit_if_stopped();
 
-    if (connected && !incoming_ready_pps())
+    /* Without an imsconfig file a restart can't help, and it drops the registration. */
+    if (connected && !incoming_ready_pps() && access(g_ims_xml_path, F_OK) == 0)
     {
         LOG_VERBOSE("Incoming state not ready after first attempt, retrying...");
         log_msg("[BBE] INCOMING_RETRY");
