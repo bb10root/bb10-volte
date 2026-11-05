@@ -34,7 +34,7 @@
 #define IMS_CHECK_INTERVAL_SEC 10
 #define IMS_DOWN_GRACE_SEC 60     /* Tolerated re-registration time before restarting IMS */
 #define IMS_RETRY_INTERVAL_SEC 300 /* Wait after a reconnect sequence gives up */
-#define REGISTER_WAIT_SEC 180      /* ims_rrm tries the next P-CSCF only after 128 s */
+#define REGISTER_WAIT_SEC 60
 #define RADIO_RESET_MIN_INTERVAL_SEC 1800
 
 /* network_service bits, as tested by ims_rrm and named by cellular-control */
@@ -542,7 +542,11 @@ static void write_dca_configs(void)
 {
     mkdir_p("/var/dca/sources/ims/services/carrier_config/ims", 0755);
 
-    const char *ir92_cfg = "@ir92\nUsePreconditions:n:0\nSMS_Format::3GPP\namr_modeset_list::7\namrwb_modeset_list::2\n";
+    /* The phone's SDP answer copies these lists. Answering a network offer of
+       0,2,4,7 (AMR-WB 0,1,2) with only 7 (AMR-WB 2), the stock values, left
+       incoming calls with no audio from the phone, and the network ended them
+       after about 30 seconds. */
+    const char *ir92_cfg = "@ir92\nUsePreconditions:n:0\nSMS_Format::3GPP\namr_modeset_list::0,2,4,7\namrwb_modeset_list::0,1,2\n";
     write_file(IR92_PATH, ir92_cfg, 0644);
 
     const char *ims_cfg = "@ims\n"
@@ -552,7 +556,13 @@ static void write_dca_configs(void)
                           "supported_networks:json:[\"LTE\"]\n"
                           "PCSCF_discoveryV2:json:[\"PCO\"]\n"
                           "SDK_Config::3GPP\n"
-                          "IMS_always_on:b:true\n";
+                          "IMS_always_on:b:true\n"
+                          /* ponytail: HD Voice on for every network; add per-carrier
+                             handling if one rejects AMR-WB. */
+                          "AudioConfig:json:{\"HDvoice\":true}\n"
+                          /* REGISTER is about 1900 bytes. Some network routes drop it as
+                             fragmented UDP, so send large messages over TCP. */
+                          "UDP_max_size:n:1300\n";
     write_file("/var/dca/sources/ims/services/carrier_config/ims/ims", ims_cfg, 0644);
 
     const char *sources[] = {"ims", "ims_defaults", "omadm", "test"};
@@ -575,10 +585,64 @@ static void write_dca_configs(void)
     write_file("/var/dca/sources/test/services/carrier_config/radio_qct/ims", "@ims\nIMS_platform::common\n", 0644);
 }
 
+/* --- P-CSCF routes --- */
+
+/* ponytail: IPv4 only; extend the character classes if a network gives IPv6 P-CSCFs. */
+static int parse_route_failure(const char *line, char *host, char *gateway)
+{
+    return sscanf(line, "add host %63[0-9.]: gateway %63[0-9.]: Permission denied", host, gateway) == 2;
+}
+
+/* ims_rrm can't add its P-CSCF routes without root, and reports each failure in
+ * its log. Without them, replies to connections from the P-CSCF leave on the
+ * default route, so the phone never receives a BYE sent over TCP. */
+static void add_missing_ims_routes(void)
+{
+    static long offset = 0;
+    char path[512];
+    char line[256];
+
+    snprintf(path, sizeof(path), "%s/ims-start.log", RUN_PATH);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+
+    /* start_ims() truncates the log. */
+    fseek(f, 0, SEEK_END);
+    if (ftell(f) < offset)
+        offset = 0;
+    fseek(f, offset, SEEK_SET);
+
+    while (fgets(line, sizeof(line), f))
+    {
+        char host[64];
+        char gateway[64];
+
+        if (!parse_route_failure(line, host, gateway))
+            continue;
+
+        char route_log[512];
+        snprintf(route_log, sizeof(route_log), "%s/route.log", RUN_PATH);
+
+        /* These static routes outlive an IP change, such as airplane mode. A
+           route through the old address makes every connection to the P-CSCF
+           fail with "Can't assign requested address". */
+        char *del_args[] = {"route", "delete", "-host", host, NULL};
+        char *add_args[] = {"route", "add", "-host", host, gateway, NULL};
+        int del_status = run_cmd_spawn(del_args, route_log);
+        int add_status = run_cmd_spawn(add_args, route_log);
+        log_msg("[BBE] IMS_ROUTE: %s via %s (del %d, add %d)", host, gateway, del_status, add_status);
+    }
+
+    offset = ftell(f);
+    fclose(f);
+}
+
 static int wait_connected(void)
 {
     for (int i = 0; i < REGISTER_WAIT_SEC / 2; i++)
     {
+        add_missing_ims_routes();
         if (ims_connected_pps())
             return 1;
         if (g_stop_requested)
@@ -830,6 +894,19 @@ static int voice_flag_self_test(void)
     }
 
     puts("[BBE] Voice flag: 5 cases passed");
+
+    char host[64];
+    char gateway[64];
+    if (!parse_route_failure("add host 192.0.2.1: gateway 198.51.100.1: Permission denied\n", host, gateway) ||
+        strcmp(host, "192.0.2.1") != 0 || strcmp(gateway, "198.51.100.1") != 0 ||
+        parse_route_failure("route: writing to routing socket: Permission denied\n", host, gateway) ||
+        parse_route_failure("add host fd00::1: gateway fd00::2: Permission denied\n", host, gateway))
+    {
+        fprintf(stderr, "[BBE] route parser self-test failed\n");
+        return 1;
+    }
+
+    puts("[BBE] Route parser: 3 cases passed");
     return 0;
 }
 
@@ -878,6 +955,7 @@ static void *detailed_pps_monitor_thread(void *arg)
             stats_export_to_file();
         }
 
+        add_missing_ims_routes();
         sync_voice_flag(1);
         check_ims_health(&was_ready);
 
