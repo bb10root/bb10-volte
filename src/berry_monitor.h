@@ -16,6 +16,5 @@ int berry_daemon_pid(void);
 
 void start_berry(void);
 void stop_berry(void);
-int self_test(void);
 
 #endif

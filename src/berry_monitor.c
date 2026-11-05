@@ -270,35 +270,3 @@ void stop_berry(void)
         pthread_join(g_berry_thread, NULL);
     }
 }
-
-int self_test(void)
-{
-    const struct
-    {
-        const char *pps;
-        int want;
-    } cases[] = {
-        {"@status_public\n[n]status::connected\n[n]default_ran::LTE\ndeviceConfig:json:[\"VoLTE\"]\n", 1},
-        {"@status_public\nstatus::disconnected\ndefault_ran::LTE\ndeviceConfig:json:[\"VoLTE\"]\n", 0},
-        {"@status_public\nstatus::connected\ndefault_ran::WLAN\ndeviceConfig:json:[\"VoLTE\"]\n", 0},
-        {"@status_public\nstatus::connected\ndefault_ran::LTE\ndeviceConfig:json:[\"SMS\",\"VoLTE\"]\n", 1},
-        {"@status_public\nstatus::connected\ndefault_ran::LTE\ndeviceConfig:json:[\"SMS\"]\n", 0},
-        {"@status_public\nstatus::connected\ndefault_ran::LTE\ndeviceConfig:json:[\"VoLTE\"\n", 0},
-        {"@status_public\n", 0}};
-
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
-    {
-        char buf[1024];
-        snprintf(buf, sizeof(buf), "%s", cases[i].pps);
-        int active = parse_ims_pps_buffer(buf);
-
-        if (active != cases[i].want)
-        {
-            fprintf(stderr, "[BBE] PPS decoder self-test %zu failed\n", i);
-            return 1;
-        }
-    }
-
-    puts("[BBE] PPS decoder: 7 cases passed");
-    return 0;
-}

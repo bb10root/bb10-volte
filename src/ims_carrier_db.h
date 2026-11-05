@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 
+#include "carrier_fetch.h"
+
 #define CARRIER_DB_NAME    "carrierIds.xml"
 #define CARRIER_STOCK_NAME "carrierIds.stock.xml"
 #define CARRIER_APNS_NAME  "carrier-apns.tsv"
@@ -23,8 +25,5 @@ int ims_carrier_db_save_stock(const char *src, const char *dst);
  */
 int ims_carrier_db_generate(const char *textpb, const char *apns_xml, size_t apns_len,
                             const char *stock_path, const char *out_db, const char *out_apns);
-
-/* Downloads the AOSP lists over verified HTTPS, then generates. 0 on success. */
-int ims_carrier_db_fetch(const char *stock_path, const char *out_db, const char *out_apns);
 
 #endif /* IMS_CARRIER_DB_H */

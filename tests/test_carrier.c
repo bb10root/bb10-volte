@@ -6,7 +6,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "ims_carrier_config.h"
+#include "carrier_lookup.h"
+#include "carrier_profile.h"
 #include "ims_carrier_db.h"
 
 #define VOD_ID 284

@@ -13,7 +13,11 @@ TARGET_BIN := $(PKG_DIR)/ims_manager
 TARGET_SO  := $(PKG_DIR)/devnp-volte-swcrypto.so
 
 # Source files
-SRCS_BIN  := ims_manager.c ims_carrier_config.c ims_carrier_db.c sys_utils.c berry_monitor.c
+SRCS_BIN  := ims_manager.c daemon_stats.c system_state.c carrier_apply.c ims_control.c ims_routes.c \
+             ims_reconnect.c voice_flag.c pps_monitor.c self_test.c \
+             ims_carrier_config.c carrier_lookup.c carrier_profile.c \
+             ims_carrier_db.c carrier_rows.c carrier_apns.c carrier_fetch.c \
+             sys_utils.c log_utils.c file_utils.c proc_utils.c berry_monitor.c
 SRCS_BIN  := $(addprefix $(SRC_DIR)/, $(SRCS_BIN))
 SRCS_SO   := $(SRC_DIR)/devnp-volte-swcrypto.c
 
@@ -81,7 +85,10 @@ package: $(TARGET_BIN) $(TARGET_SO)
 # Runs on the build host, not the phone: the carrier code has no QNX dependencies
 test:
 	@mkdir -p build
-	cc -std=gnu99 -Isrc $$(xml2-config --cflags) tests/test_carrier.c src/ims_carrier_config.c src/ims_carrier_db.c $$(xml2-config --libs) -lcurl -o build/test_carrier
+	cc -std=gnu99 -Isrc $$(xml2-config --cflags) tests/test_carrier.c \
+		src/ims_carrier_config.c src/carrier_lookup.c src/carrier_profile.c \
+		src/ims_carrier_db.c src/carrier_rows.c src/carrier_apns.c src/carrier_fetch.c \
+		$$(xml2-config --libs) -lcurl -o build/test_carrier
 	./build/test_carrier
 
 # Clean object files, dependency files, binaries, and archive
