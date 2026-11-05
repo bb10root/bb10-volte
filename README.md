@@ -24,6 +24,7 @@ The project builds upon community research into the BlackBerry 10 VoLTE implemen
 - **VoLTE Enablement** — enables VoLTE-related functionality on supported BlackBerry 10 devices.
 - **LTE Voice Calling** — aims to allow voice calls over LTE without relying on legacy 2G/3G networks.
 - **Extended Device Usability** — helps keep compatible BB10 devices useful as legacy cellular networks are decommissioned.
+- **Self-Provisioning** — builds the carrier list and the VoLTE profile on the phone from Android's public carrier data.
 - **Easy Installation** — distributed as a ZIP package and installed through AutoRoot.
 - **Community Research** — builds upon existing reverse engineering and proof-of-concept research from the BB10 community.
 
@@ -59,21 +60,28 @@ Android's APNs replace the stock ones, which are around ten years old. A stock A
 
 The profile is linked over `/base/etc/carrier/config/<carrier_id>.xml` and published as the carrier's normal config, so you can change the APN in Settings. A carrier with no stock config and no Android APN starts with it empty: enter it in Settings, because a guessed APN can break mobile data.
 
+A wrong APN can drop the phone to 2G, because the same APN is used to attach to LTE. If that happens, correct it in Settings and select LTE again by hand. VoLTE then reconnects by itself, which can take a few minutes.
+
 **SIMs with no carrier ID.** A SIM that is in neither list has no profile to link. It can only use an optional `data/carrier-default-volte.xml`, which also sets the APNs. The phone can't save APN changes while it uses this file. To add it, create the file and add this line to `pkg/data/perms`:
 
 ```text
 carrier-default-volte.xml:0:0:644
 ```
 
-### Forcing IMS voice (experimental)
+### Forcing IMS voice (on by default)
 
-Some networks register the device but report no IMS voice support, so calls fall back to 2G/3G. If your network does accept the calls, the addon can make outgoing calls use VoLTE anyway: add an empty `pkg/data/force-ims-voice` file and list it in `pkg/data/perms`:
+Some networks register the device for IMS but report no IMS voice support. `ims_rrm` then refuses IMS calls and they fall back to 2G/3G, even on networks that would accept them.
 
-```text
-force-ims-voice:0:0:644
-```
+To get past this, the package ships an empty `data/force-ims-voice` file. While IMS is registered on LTE, the daemon sets the `IMS_VOICE_SUPPORTED` bit that `ims_rrm` checks. When IMS is down it clears the bit, so calls can still fall back.
 
-While IMS is registered on LTE, the daemon then sets the `IMS_VOICE_SUPPORTED` bit that `ims_rrm` checks. Only use this if you have tested it on your network: if the network refuses these calls, they may fail instead of falling back. Incoming calls are still routed by the network, so they may keep using 2G/3G. Delete the file from `data/` on the device to turn this off, because reinstalling does not remove it.
+On the network this was tested on, calls in both directions depend on it. With it off, outgoing calls go straight to 2G/3G, and `ims_rrm` answers incoming calls with `488 Not Acceptable Here`, so they move to 2G/3G too.
+
+This is still experimental:
+
+- If your network refuses these calls, they may fail instead of falling back. If that happens, turn this off.
+- Emergency call routing has not been checked with this bit set.
+
+**To turn it off**, delete `force-ims-voice` from `data/` on the device and reboot, because the daemon only reads it at start. Installing the package again restores the file, so delete it again after each install, or remove the file and its line in `pkg/data/perms` before building.
 
 ## 🚀 Installation
 
