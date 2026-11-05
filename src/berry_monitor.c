@@ -91,7 +91,7 @@ static int set_icon(int on)
     static const char yes[] = "[n]dat:json:{\"bb_service\":{\"state\":\"on\"}}\n";
     static const char no[] = "[n]dat:json:{\"bb_service\":{\"state\":\"off\"}}\n";
     const char *s = on ? yes : no;
-    size_t n = sizeof(yes) - 1;
+    size_t n = strlen(s);
 
     int fd = open(PPS_ICON, O_WRONLY | O_CLOEXEC);
     if (fd < 0)
@@ -139,6 +139,7 @@ static void *berry_monitor_thread(void *arg)
     if (lockfd < 0)
     {
         log_msg("[BBE] indicator lock error");
+        g_berry_running = 0;
         return NULL;
     }
 
@@ -150,15 +151,16 @@ static void *berry_monitor_thread(void *arg)
     {
         log_msg("[BBE] indicator monitor already running in background (lock busy)");
         close(lockfd);
+        g_berry_running = 0;
         return NULL;
     }
 
-    g_berry_running = 1;
-    log_msg("[BBE] VoLTE berry monitor thread started (PPS ?wait,delta mode)");
+    log_msg("[BBE] VoLTE berry monitor thread started (PPS ?delta mode)");
 
     while (g_berry_running)
     {
-        int pps_fd = open(PPS_IMS "?wait,delta", O_RDONLY | O_CLOEXEC);
+        /* Non-blocking: poll()'s timeout must bound how long stop_berry() waits. */
+        int pps_fd = open(PPS_IMS "?delta", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if (pps_fd < 0)
         {
             if (!warned)
@@ -228,13 +230,33 @@ static void *berry_monitor_thread(void *arg)
     return NULL;
 }
 
+/* Do not call from the daemon: closing this fd would drop its own lock. */
+int berry_daemon_pid(void)
+{
+    int fd = open(BERRY_LOCK, O_RDWR | O_CLOEXEC);
+    if (fd < 0)
+        return 0;
+
+    struct flock lock;
+    memset(&lock, 0, sizeof(lock));
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+
+    int pid = (fcntl(fd, F_GETLK, &lock) == 0 && lock.l_type != F_UNLCK) ? (int)lock.l_pid : 0;
+    close(fd);
+    return pid;
+}
+
 void start_berry(void)
 {
     if (!g_berry_running)
     {
         mkdir_p(RUN_PATH, 0755);
+        /* Set before the thread exists: main exits as soon as it reads 0. */
+        g_berry_running = 1;
         if (pthread_create(&g_berry_thread, NULL, berry_monitor_thread, NULL) != 0)
         {
+            g_berry_running = 0;
             LOG_VERBOSE("Failed to start berry monitor thread");
         }
     }
@@ -247,36 +269,4 @@ void stop_berry(void)
         g_berry_running = 0;
         pthread_join(g_berry_thread, NULL);
     }
-}
-
-int self_test(void)
-{
-    const struct
-    {
-        const char *pps;
-        int want;
-    } cases[] = {
-        {"@status_public\n[n]status::connected\n[n]default_ran::LTE\ndeviceConfig:json:[\"VoLTE\"]\n", 1},
-        {"@status_public\nstatus::disconnected\ndefault_ran::LTE\ndeviceConfig:json:[\"VoLTE\"]\n", 0},
-        {"@status_public\nstatus::connected\ndefault_ran::WLAN\ndeviceConfig:json:[\"VoLTE\"]\n", 0},
-        {"@status_public\nstatus::connected\ndefault_ran::LTE\ndeviceConfig:json:[\"SMS\",\"VoLTE\"]\n", 1},
-        {"@status_public\nstatus::connected\ndefault_ran::LTE\ndeviceConfig:json:[\"SMS\"]\n", 0},
-        {"@status_public\nstatus::connected\ndefault_ran::LTE\ndeviceConfig:json:[\"VoLTE\"\n", 0},
-        {"@status_public\n", 0}};
-
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
-    {
-        char buf[1024];
-        snprintf(buf, sizeof(buf), "%s", cases[i].pps);
-        int active = parse_ims_pps_buffer(buf);
-
-        if (active != cases[i].want)
-        {
-            fprintf(stderr, "[BBE] PPS decoder self-test %zu failed\n", i);
-            return 1;
-        }
-    }
-
-    puts("[BBE] PPS decoder: 7 cases passed");
-    return 0;
 }

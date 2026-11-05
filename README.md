@@ -24,6 +24,7 @@ The project builds upon community research into the BlackBerry 10 VoLTE implemen
 - **VoLTE Enablement** — enables VoLTE-related functionality on supported BlackBerry 10 devices.
 - **LTE Voice Calling** — aims to allow voice calls over LTE without relying on legacy 2G/3G networks.
 - **Extended Device Usability** — helps keep compatible BB10 devices useful as legacy cellular networks are decommissioned.
+- **Self-Provisioning** — builds the carrier list and the VoLTE profile on the phone from Android's public carrier data.
 - **Easy Installation** — distributed as a ZIP package and installed through AutoRoot.
 - **Community Research** — builds upon existing reverse engineering and proof-of-concept research from the BB10 community.
 
@@ -44,6 +45,43 @@ VoLTE support varies between devices, firmware versions, and mobile operators.
 Even if LTE data works correctly, voice over LTE may not work unless the carrier accepts the device's configuration and provisions the service for it.
 
 Compatibility should be verified on each target device and network.
+
+### Carrier provisioning
+
+The addon keeps its own carrier list and builds the VoLTE profile for your SIM on the phone, so most carriers need no per-carrier file.
+
+**Carrier list.** The stock list dates from 2017. On first start, and when its copy is over 30 days old, the addon downloads Android's carrier and APN lists from `android.googlesource.com`. It adds the missing carriers to a copy of the stock list and links that copy over `/base/etc/carrier/ids/carrierIds.xml`. The system partition is not modified, and the link is made again at every start. The files live in `data/`: `carrierIds.xml`, `carrierIds.stock.xml` and `carrier-apns.tsv`.
+
+The download needs a working connection. If the phone has no working APN yet, connect to Wi-Fi or set the APN by hand once. If the download fails, the stock list stays in use and the addon tries again at the next start. To refresh the list by hand, run `ims_manager -a provision`.
+
+**Profile.** The addon uses `data/carrier-<carrier_id>-volte.xml` if you wrote one. Otherwise it builds `data/carrier-auto-<carrier_id>-volte.xml` at start, from the stock config for that carrier, or from the stock default config plus Android's APNs. It adds an IMS service unless the stock config already has a real one.
+
+Android's APNs replace the stock ones, which are around ten years old. A stock APN stays only if Android has no usable APN for that carrier, or doesn't give one clear answer across the networks that carrier spans. Android APNs that are IPv6-only or can't be used on LTE are skipped.
+
+The profile is linked over `/base/etc/carrier/config/<carrier_id>.xml` and published as the carrier's normal config, so you can change the APN in Settings. A carrier with no stock config and no Android APN starts with it empty: enter it in Settings, because a guessed APN can break mobile data.
+
+A wrong APN can drop the phone to 2G, because the same APN is used to attach to LTE. If that happens, correct it in Settings and select LTE again by hand. VoLTE then reconnects by itself, which can take a few minutes.
+
+**SIMs with no carrier ID.** A SIM that is in neither list has no profile to link. It can only use an optional `data/carrier-default-volte.xml`, which also sets the APNs. The phone can't save APN changes while it uses this file. To add it, create the file and add this line to `pkg/data/perms`:
+
+```text
+carrier-default-volte.xml:0:0:644
+```
+
+### Forcing IMS voice (on by default)
+
+Some networks register the device for IMS but report no IMS voice support. `ims_rrm` then refuses IMS calls and they fall back to 2G/3G, even on networks that would accept them.
+
+To get past this, the package ships an empty `data/force-ims-voice` file. While IMS is registered on LTE, the daemon sets the `IMS_VOICE_SUPPORTED` bit that `ims_rrm` checks. When IMS is down it clears the bit, so calls can still fall back.
+
+On the network this was tested on, calls in both directions depend on it. With it off, outgoing calls go straight to 2G/3G, and `ims_rrm` answers incoming calls with `488 Not Acceptable Here`, so they move to 2G/3G too.
+
+This is still experimental:
+
+- If your network refuses these calls, they may fail instead of falling back. If that happens, turn this off.
+- Emergency call routing has not been checked with this bit set.
+
+**To turn it off**, delete `force-ims-voice` from `data/` on the device and reboot, because the daemon only reads it at start. Installing the package again restores the file, so delete it again after each install, or remove the file and its line in `pkg/data/perms` before building.
 
 ## 🚀 Installation
 
@@ -70,6 +108,13 @@ Execute the AutoRoot installer with the path to the ZIP archive:
 ```
 
 Replace `/path/to/volte.zip` with the actual path to the transferred archive.
+
+When upgrading, stop the daemon first and wait until it has exited. Otherwise the installer can report success without replacing the binary:
+
+```bash
+slay ims_manager
+pidin arg | grep '[i]ms_manager'   # repeat until this prints nothing
+```
 
 ### 5. Verify functionality
 
