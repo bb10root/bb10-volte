@@ -45,17 +45,25 @@ Even if LTE data works correctly, voice over LTE may not work unless the carrier
 
 Compatibility should be verified on each target device and network.
 
-### Carriers without a configuration
+### Carrier provisioning
 
-The addon uses `pkg/data/carrier-<carrier_id>-volte.xml`, where the ID comes from the SIM's MCC/MNC. If the SIM has no carrier ID, or no file exists for it, the addon uses `pkg/data/carrier-default-volte.xml` when present. Without that file, it publishes no carrier configuration.
+The addon keeps its own carrier list and builds the VoLTE profile for your SIM on the phone, so most carriers need no per-carrier file.
 
-To add a fallback, create that file and add this line to `pkg/data/perms`:
+**Carrier list.** The stock list dates from 2017. On first start, and when its copy is over 30 days old, the addon downloads Android's carrier and APN lists from `android.googlesource.com`. It adds the missing carriers to a copy of the stock list and links that copy over `/base/etc/carrier/ids/carrierIds.xml`. The system partition is not modified, and the link is made again at every start. The files live in `data/`: `carrierIds.xml`, `carrierIds.stock.xml` and `carrier-apns.tsv`.
+
+The download needs a working connection. If the phone has no working APN yet, connect to Wi-Fi or set the APN by hand once. If the download fails, the stock list stays in use and the addon tries again at the next start. To refresh the list by hand, run `ims_manager -a provision`.
+
+**Profile.** The addon uses `data/carrier-<carrier_id>-volte.xml` if you wrote one. Otherwise it builds `data/carrier-auto-<carrier_id>-volte.xml` at start, from the stock config for that carrier, or from the stock default config plus Android's APNs. It adds an IMS service unless the stock config already has a real one.
+
+Android's APNs replace the stock ones, which are around ten years old. A stock APN stays only if Android has no usable APN for that carrier, or doesn't give one clear answer across the networks that carrier spans. Android APNs that are IPv6-only or can't be used on LTE are skipped.
+
+The profile is linked over `/base/etc/carrier/config/<carrier_id>.xml` and published as the carrier's normal config, so you can change the APN in Settings. A carrier with no stock config and no Android APN starts with it empty: enter it in Settings, because a guessed APN can break mobile data.
+
+**SIMs with no carrier ID.** A SIM that is in neither list has no profile to link. It can only use an optional `data/carrier-default-volte.xml`, which also sets the APNs. The phone can't save APN changes while it uses this file. To add it, create the file and add this line to `pkg/data/perms`:
 
 ```text
 carrier-default-volte.xml:0:0:644
 ```
-
-The file also sets the internet and MMS APNs, so a wrong value can break mobile data.
 
 ### Forcing IMS voice (experimental)
 

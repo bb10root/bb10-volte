@@ -75,7 +75,8 @@ A network drop leaves `ims_rrm` running, because it registers again by itself wh
 ### Module Internal Headers
 * `sys_utils.h`: System wrappers, string manipulators, and POSIX spawn execution functions.
 * `berry_monitor.h`: Visual indicator and UI status bar integration utilities.
-* `ims_carrier_config.h`: XML carrier profile parser and provisioning apply utilities.
+* `ims_carrier_config.h`: Carrier lookup, VoLTE profile builder, and provisioning apply utilities.
+* `ims_carrier_db.h`: Downloads Android's carrier and APN lists and generates the addon's carrier list.
 
 ### Monitored PPS Paths
 

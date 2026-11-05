@@ -13,7 +13,7 @@ TARGET_BIN := $(PKG_DIR)/ims_manager
 TARGET_SO  := $(PKG_DIR)/devnp-volte-swcrypto.so
 
 # Source files
-SRCS_BIN  := ims_manager.c ims_carrier_config.c sys_utils.c berry_monitor.c
+SRCS_BIN  := ims_manager.c ims_carrier_config.c ims_carrier_db.c sys_utils.c berry_monitor.c
 SRCS_BIN  := $(addprefix $(SRC_DIR)/, $(SRCS_BIN))
 SRCS_SO   := $(SRC_DIR)/devnp-volte-swcrypto.c
 
@@ -24,7 +24,7 @@ DEPS      := $(OBJS_BIN:.o=.d) $(OBJS_SO:.o=.d)
 
 # Base CFlags and LDFLags
 CFLAGS    := -std=gnu99 -MMD -MP
-LDFLAGS   := -lxml2 -lpps -lslog2 -lsocket
+LDFLAGS   := -lxml2 -lcurl -lpps -lslog2 -lsocket
 
 # Build mode toggle: DEBUG=1 vs Release (default)
 ifeq ($(DEBUG), 1)
@@ -35,7 +35,7 @@ else
     STRIP_CMD = @echo "[*] Stripping $@..."; $(STRIP) $@
 endif
 
-.PHONY: all clean package help debug
+.PHONY: all clean package help debug test
 
 all: package
 
@@ -78,6 +78,12 @@ package: $(TARGET_BIN) $(TARGET_SO)
 	@cd pkg && $(ZIP) -r -q ../$(ZIP_NAME) ./*
 	@echo "[+] All done! Package created: $(ZIP_NAME)"
 
+# Runs on the build host, not the phone: the carrier code has no QNX dependencies
+test:
+	@mkdir -p build
+	cc -std=gnu99 -Isrc $$(xml2-config --cflags) tests/test_carrier.c src/ims_carrier_config.c src/ims_carrier_db.c $$(xml2-config --libs) -lcurl -o build/test_carrier
+	./build/test_carrier
+
 # Clean object files, dependency files, binaries, and archive
 clean:
 	@echo "[*] Cleaning build artifacts..."
@@ -89,4 +95,5 @@ help:
 	@echo "  make DEBUG=1       - Build debug binaries (-g -O0, no strip)"
 	@echo "  make debug         - Alias for 'make DEBUG=1'"
 	@echo "  make -j4           - Parallel build using 4 core workers"
+	@echo "  make test          - Build and run the carrier tests on this machine"
 	@echo "  make clean         - Remove object files, generated dependencies, and archive"
