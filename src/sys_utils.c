@@ -421,6 +421,9 @@ int slay_by_cmdline_graceful(const char *search_str, int timeout_ms)
             if (pids[i] <= 0)
                 continue;
 
+            /* kill(pid, 0) also succeeds on a zombie, so reap our own children first. */
+            waitpid(pids[i], NULL, WNOHANG);
+
             if (kill(pids[i], 0) == 0)
             {
                 still_running++;

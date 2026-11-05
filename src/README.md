@@ -39,21 +39,28 @@
              [State: Lost]                             [State: Restored]
                      |                                         |
                      v                                         v
-               stop_ims()                         reconnect_ims_with_backoff()
-            (Graceful slay)                                    |
-                     |                                 apply_volte_provisioning()
-                     v                                         |
-              stats_on_drop()                              start_ims()
-                                                               |
-                                                        ims_connected_pps()
-                                                               |
-                                                    +----------+----------+
-                                                    |                     |
-                                                [Success]              [Failed]
-                                                    |                     |
-                                                    v                     v
-                                           stats_on_success()    stats_on_failure()
+              stats_on_drop()                    ims_rrm still running?
+                     |                                         |
+          stop_ims() only if SIM or            +---------------+---------------+
+             data was lost                     | yes                           | no
+                                               v                               v
+                                      check_ims_health()         reconnect_ims_with_backoff()
+                                   (restarts ims_rrm if it                     |
+                                     isn't back within 60 s)       apply_volte_provisioning()
+                                               |                               |
+                                               |                           start_ims()
+                                               |                               |
+                                               |                      ims_connected_pps()
+                                               |                               |
+                                               |                    +----------+----------+
+                                               |                    |                     |
+                                               |                [Success]              [Failed]
+                                               |                    |                     |
+                                               v                    v                     v
+                                       stats_on_success()  stats_on_success()    stats_on_failure()
 ```
+
+A network drop leaves `ims_rrm` running, because it registers again by itself when LTE returns. Stopping it would make that slower: it drops its IPsec keys first, and its old socket then holds the local port, so the next `REGISTER` from the same address fails with `Address already in use` for up to about 2 minutes. `ims_rrm` doesn't retry that send.
 
 ---
 
@@ -63,6 +70,7 @@
 * **QNX Neutrino C Library:** Standard POSIX routines (`pthread`, `poll`, `spawn`).
 * **PPS Library:** `<sys/pps.h>` (`libpps.so`)
 * **Slog2 Subsystem:** `<sys/slog2.h>` (`libslog2.so`)
+* **Socket Library:** `<sys/socket.h>` (`libsocket.so`)
 
 ### Module Internal Headers
 * `sys_utils.h`: System wrappers, string manipulators, and POSIX spawn execution functions.

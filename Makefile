@@ -24,7 +24,7 @@ DEPS      := $(OBJS_BIN:.o=.d) $(OBJS_SO:.o=.d)
 
 # Base CFlags and LDFLags
 CFLAGS    := -std=gnu99 -MMD -MP
-LDFLAGS   := -lxml2 -lpps -lslog2
+LDFLAGS   := -lxml2 -lpps -lslog2 -lsocket
 
 # Build mode toggle: DEBUG=1 vs Release (default)
 ifeq ($(DEBUG), 1)

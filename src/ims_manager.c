@@ -12,6 +12,9 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/pps.h>
 #include <sys/slog2.h>
 
@@ -151,8 +154,11 @@ static double timespec_diff_sec(const struct timespec *start, const struct times
     return (end->tv_sec - start->tv_sec) + (end->tv_nsec - start->tv_nsec) / 1e9;
 }
 
+static int g_drop_pending = 0;
+
 static void stats_on_drop(void)
 {
+    g_drop_pending = 1;
     g_stats.total_drops++;
     clock_gettime(CLOCK_MONOTONIC, &g_stats.drop_time);
     stats_export_to_file();
@@ -163,6 +169,7 @@ static void stats_on_success(void)
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
 
+    g_drop_pending = 0;
     double recovery_duration = timespec_diff_sec(&g_stats.drop_time, &now);
     g_stats.successful_reconnects++;
     g_stats.total_recovery_time_sec += recovery_duration;
@@ -498,6 +505,11 @@ static void start_ims(void)
         "-U", "453:31,80,387,427,521,1001",
         NULL};
 
+    /* `on` execs ims_rrm, so it is our child. Reap one that crashed or was killed. */
+    static pid_t last_pid = 0;
+    if (last_pid > 0)
+        waitpid(last_pid, NULL, WNOHANG);
+
     pid_t pid;
     int status = posix_spawnp(&pid, "on", &actions, &attr, args, NULL);
 
@@ -507,6 +519,7 @@ static void start_ims(void)
     }
     else
     {
+        last_pid = pid;
         LOG_VERBOSE("Spawned ims_rrm successfully with PID %d", pid);
     }
 
@@ -596,11 +609,69 @@ static int parse_route_failure(const char *line, char *host, char *gateway)
 /* ims_rrm can't add its P-CSCF routes without root, and reports each failure in
  * its log. Without them, replies to connections from the P-CSCF leave on the
  * default route, so the phone never receives a BYE sent over TCP. */
+static char g_route_gateway[64] = "";
+
+static int address_is_local(const char *address)
+{
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    if (inet_pton(AF_INET, address, &sa.sin_addr) != 1)
+        return 1;
+
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0)
+        return 1;
+
+    int gone = bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 && errno == EADDRNOTAVAIL;
+    close(fd);
+    return !gone;
+}
+
+/* These static routes outlive an IP change, such as airplane mode. ims_rrm reports its
+ * routes just before it registers, too late for add_missing_ims_routes() to save that
+ * REGISTER, and it doesn't retry the send. So clear them once their address is gone.
+ * Only then: ims_rrm may not report them again while its address is unchanged. */
+static void delete_stale_ims_routes(void)
+{
+    char path[512];
+    char route_log[512];
+    char line[256];
+
+    if (g_route_gateway[0] == '\0' || address_is_local(g_route_gateway))
+        return;
+    g_route_gateway[0] = '\0';
+
+    snprintf(path, sizeof(path), "%s/ims-start.log", RUN_PATH);
+    snprintf(route_log, sizeof(route_log), "%s/route.log", RUN_PATH);
+
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+
+    while (fgets(line, sizeof(line), f))
+    {
+        char host[64];
+        char gateway[64];
+
+        if (!parse_route_failure(line, host, gateway))
+            continue;
+
+        char *del_args[] = {"route", "delete", "-host", host, NULL};
+        if (run_cmd_spawn(del_args, route_log) == 0)
+            log_msg("[BBE] IMS_ROUTE_CLEARED: %s", host);
+    }
+
+    fclose(f);
+}
+
 static void add_missing_ims_routes(void)
 {
     static long offset = 0;
     char path[512];
     char line[256];
+
+    delete_stale_ims_routes();
 
     snprintf(path, sizeof(path), "%s/ims-start.log", RUN_PATH);
     FILE *f = fopen(path, "r");
@@ -632,6 +703,7 @@ static void add_missing_ims_routes(void)
         int del_status = run_cmd_spawn(del_args, route_log);
         int add_status = run_cmd_spawn(add_args, route_log);
         log_msg("[BBE] IMS_ROUTE: %s via %s (del %d, add %d)", host, gateway, del_status, add_status);
+        snprintf(g_route_gateway, sizeof(g_route_gateway), "%s", gateway);
     }
 
     offset = ftell(f);
@@ -698,15 +770,16 @@ static void reset_radio_if_stalled(void)
     last_reset = now;
     log_msg("[BBE] RADIO_RESET: IMS connection stalled");
     set_radio_power("OFF");
-    sleep(5);
+    /* An ON sent during shutdown is lost, which leaves the phone with no mobile network.
+       Shutdown has taken over 6 s. */
+    for (int i = 0; i < 30 && !pps_check_attribute_contains(PPS_RADIO_PATH, "power_status", "OFF"); i++)
+        sleep(1);
     set_radio_power("ON");
 
-    for (int i = 0; i < 30 && g_lte_monitor_running; i++)
-    {
-        if (pps_check_attribute_contains(PPS_RADIO_PATH, "network_technology", "lte"))
-            break;
+    /* ims_rrm registers by itself once the radio is back. network_technology can't show
+       that: it may still read "lte" from before the reset. */
+    for (int i = 0; i < 30 && g_lte_monitor_running && !ims_connected_pps(); i++)
         sleep(2);
-    }
 }
 
 static int reconnect_ims_with_backoff(void)
@@ -723,11 +796,19 @@ static int reconnect_ims_with_backoff(void)
             return 0;
         }
 
+        /* A radio reset or ims_rrm itself may have registered since the last attempt. */
+        if (attempt > 1 && find_pid_by_name("ims_rrm", 0) > 0 && ims_connected_pps())
+        {
+            log_msg("[BBE] CONNECTED");
+            return 1;
+        }
+
         LOG_VERBOSE("Attempting IMS reconnect (Attempt %d/%d)...", attempt, MAX_RETRY_ATTEMPTS);
         log_msg("[BBE] RECONNECT_ATTEMPT:%d", attempt);
 
         stop_ims();
         apply_volte_provisioning();
+        delete_stale_ims_routes();
         start_ims();
 
         if (wait_connected())
@@ -785,13 +866,19 @@ static void check_ims_health(int *was_ready)
         return;
     }
 
+    /* Check every pass while recovering, so STATS_OK times the reconnect accurately. */
     time_t now = monotonic_sec();
-    if (last_check != 0 && now - last_check < IMS_CHECK_INTERVAL_SEC)
+    if (*was_ready && last_check != 0 && now - last_check < IMS_CHECK_INTERVAL_SEC)
         return;
     last_check = now;
 
     if (ims_healthy())
     {
+        if (!*was_ready && g_drop_pending)
+        {
+            log_msg("[BBE] CONNECTED");
+            stats_on_success();
+        }
         *was_ready = 1;
         down_since = 0;
         retry_wait = IMS_DOWN_GRACE_SEC;
@@ -993,10 +1080,16 @@ static void *detailed_pps_monitor_thread(void *arg)
             if (was_ready && !is_ready)
             {
                 stats_on_drop();
-                stop_ims();
+                /* A network drop leaves ims_rrm running: it registers again by itself, and
+                   check_ims_health() restarts it if not. Stopping it drops its IPsec keys
+                   first, so its FIN leaves in cleartext and goes unanswered. That socket
+                   then blocks the next REGISTER from the same address with "Address already
+                   in use" for up to about 2 minutes. */
+                if (!new_state.sim_ok || !new_state.data_ok)
+                    stop_ims();
                 was_ready = 0;
             }
-            else if (!was_ready && is_ready)
+            else if (!was_ready && is_ready && find_pid_by_name("ims_rrm", 0) <= 0)
             {
                 log_msg("[BBE] RESTORED: STARTING_RECONNECT");
 
