@@ -92,6 +92,8 @@ test:
 	./build/test_carrier
 	cc -std=gnu99 -Isrc tests/test_carrier_reload.c -o build/test_carrier_reload
 	./build/test_carrier_reload
+	cc -std=gnu99 -Isrc tests/test_radio_reset.c -o build/test_radio_reset
+	./build/test_radio_reset
 
 # Clean object files, dependency files, binaries, and archive
 clean:

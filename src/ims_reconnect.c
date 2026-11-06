@@ -21,6 +21,8 @@
 #define REGISTER_WAIT_SEC 60
 #define RADIO_RESET_MIN_INTERVAL_SEC 1800
 
+static int g_radio_reset_spent = 0;
+
 int wait_connected(void)
 {
     for (int i = 0; i < REGISTER_WAIT_SEC / 2; i++)
@@ -67,13 +69,17 @@ static void set_radio_power(const char *state)
 /* A connection rejected on 2G stays stalled after LTE returns, and restarting
  * ims_rrm can't clear it. Cycling the radio does, as airplane mode would.
  * A radio that's already off is left alone: IMS reads idle in airplane mode too,
- * and the cycle would turn the radio back on. */
+ * and the cycle would turn the radio back on.
+ * One reset per failure: a network refusing the IMS APN also leaves IMS idle, and
+ * cycling the radio can't change that, so it would only cut service every 30 minutes.
+ * ponytail: a second stall before IMS ever connects waits for the next daemon start. */
 static void reset_radio_if_stalled(void)
 {
     static time_t last_reset = 0;
     time_t now = monotonic_sec();
 
-    if (pps_check_attribute_contains(PPS_RADIO_PATH, "power_status", "OFF") ||
+    if (g_radio_reset_spent ||
+        pps_check_attribute_contains(PPS_RADIO_PATH, "power_status", "OFF") ||
         !pps_check_attribute_contains(PPS_IMS, "status", "idle") ||
         !pps_check_attribute_contains("/pps/services/phone/public/status", "phone_state", "idle") ||
         (last_reset != 0 && now - last_reset < RADIO_RESET_MIN_INTERVAL_SEC))
@@ -82,6 +88,7 @@ static void reset_radio_if_stalled(void)
     }
 
     last_reset = now;
+    g_radio_reset_spent = 1;
     log_msg("[BBE] RADIO_RESET: IMS connection stalled");
     set_radio_power("OFF");
     /* An ON sent during shutdown is lost, which leaves the phone with no mobile network.
@@ -188,6 +195,7 @@ void check_ims_health(int *was_ready)
 
     if (ims_healthy())
     {
+        g_radio_reset_spent = 0;
         if (!*was_ready && g_drop_pending)
         {
             log_msg("[BBE] CONNECTED");
