@@ -90,6 +90,8 @@ test:
 		src/ims_carrier_db.c src/carrier_rows.c src/carrier_apns.c src/carrier_fetch.c \
 		$$(xml2-config --libs) -lcurl -o build/test_carrier
 	./build/test_carrier
+	cc -std=gnu99 -Isrc tests/test_carrier_reload.c -o build/test_carrier_reload
+	./build/test_carrier_reload
 
 # Clean object files, dependency files, binaries, and archive
 clean:

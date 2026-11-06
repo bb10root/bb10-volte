@@ -65,13 +65,16 @@ static void set_radio_power(const char *state)
 }
 
 /* A connection rejected on 2G stays stalled after LTE returns, and restarting
- * ims_rrm can't clear it. Cycling the radio does, as airplane mode would. */
+ * ims_rrm can't clear it. Cycling the radio does, as airplane mode would.
+ * A radio that's already off is left alone: IMS reads idle in airplane mode too,
+ * and the cycle would turn the radio back on. */
 static void reset_radio_if_stalled(void)
 {
     static time_t last_reset = 0;
     time_t now = monotonic_sec();
 
-    if (!pps_check_attribute_contains(PPS_IMS, "status", "idle") ||
+    if (pps_check_attribute_contains(PPS_RADIO_PATH, "power_status", "OFF") ||
+        !pps_check_attribute_contains(PPS_IMS, "status", "idle") ||
         !pps_check_attribute_contains("/pps/services/phone/public/status", "phone_state", "idle") ||
         (last_reset != 0 && now - last_reset < RADIO_RESET_MIN_INTERVAL_SEC))
     {

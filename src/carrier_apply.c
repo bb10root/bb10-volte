@@ -13,8 +13,10 @@
 #include <sys/stat.h>
 
 #define CARRIER_DB_MAX_AGE_SECONDS (30 * 24 * 3600)
+#define CARRIER_RELOAD_WAIT_SECONDS 15
 
 static int g_built_carrier_id = -1;
+static int g_config_reloaded = 0;
 
 /*
  * Prefers a hand-written XML for this SIM's carrier ID, then one built on the phone. A SIM with no
@@ -137,10 +139,43 @@ static int publish_home_carrier(int carrier_id)
     return 1;
 }
 
+static int wait_config_loaded(const char *path)
+{
+    for (int i = 0; i < CARRIER_RELOAD_WAIT_SECONDS; i++)
+    {
+        if (pps_check_attribute_contains(PPS_DATA_PATH, "payment_profile_data_signature", path))
+            return 1;
+        sleep(1);
+    }
+    return 0;
+}
+
+/*
+ * cellular-control reads the carrier config before root is available, so it has the stock file by
+ * the time the link exists, and it doesn't watch that file. Changing the override is what makes it
+ * read again. Clearing the override then loads the linked profile, and APN edits work again.
+ */
+static void reload_carrier_config(const char *carrier_xml, int carrier_id)
+{
+    char config[96];
+
+    if (g_config_reloaded)
+        return;
+    g_config_reloaded = 1;
+
+    snprintf(config, sizeof(config), "/etc/carrier/config/%d.xml", carrier_id);
+    publish_override_xml(carrier_xml);
+    int loaded = wait_config_loaded(carrier_xml);
+    clear_override_xml();
+    loaded = wait_config_loaded(config) && loaded;
+    log_msg(loaded ? "[BBE] CARRIER_RELOADED" : "[BBE] CARRIER_RELOAD_TIMEOUT");
+}
+
 /*
  * Serves the profile as the carrier's normal config, which leaves the APN editable in Settings.
- * Safe to repeat: every step does nothing if it's already in place. The override stays as the way
- * out if that fails, since VoLTE matters more than the editable APN.
+ * Reloads once per daemon start, even when every value is already in place, since matching values
+ * don't show that cellular-control read our file. The override stays as the way out if linking or
+ * publishing fails, since VoLTE matters more than the editable APN.
  */
 int apply_carrier_xml(void)
 {
@@ -157,6 +192,7 @@ int apply_carrier_xml(void)
         snprintf(config_link, sizeof(config_link), CARRIER_CONFIG_DIR "/%d.xml", carrier_id);
         if (link_path(carrier_xml, config_link) && publish_home_carrier(carrier_id))
         {
+            reload_carrier_config(carrier_xml, carrier_id);
             clear_override_xml();
             return 1;
         }
