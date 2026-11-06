@@ -20,6 +20,8 @@
 #include "ims_carrier_config.h"
 
 #define IR92_PATH "/var/dca/sources/ims/services/carrier_config/ims/ir92"
+/* Overridden per carrier by <data>/ir92-<carrierID> (see ims_load_ir92_config) */
+#define IR92_DEFAULT_CFG "@ir92\nUsePreconditions:n:0\nSMS_Format::3GPP\namr_modeset_list::7\namrwb_modeset_list::2\n"
 #define STATS_FILE_PATH "/var/run/bb10_volte_stats.txt"
 
 #define PPS_RADIO_PATH "/pps/services/cellular/radioctrl/status_public"
@@ -58,6 +60,8 @@ typedef struct
 static char g_mcc[4] = {0};
 static char g_mnc[4] = {0};
 static char g_ims_xml_path[256] = {0};
+static int g_carrier_id = -1;
+static char g_ir92_cfg[512] = {0};
 
 static pthread_t g_lte_thread;
 static volatile int g_lte_monitor_running = 0;
@@ -247,13 +251,22 @@ static void log_state_transition(system_state_t old_st, system_state_t new_st)
     }
 }
 
+static int detect_sim_carrier(void);
+
 static int incoming_ready_pps(void)
 {
-    if (!pps_check_attribute_contains(PPS_IMS, "allowVoLteProvisioning", "1"))
+    if (g_ir92_cfg[0] == '\0' && !detect_sim_carrier())
         return 0;
 
-    char buf2[256];
-    return (read_file(IR92_PATH, buf2, sizeof(buf2)) >= 0 && strstr(buf2, "UsePreconditions:n:0") != NULL);
+    /* allowVoLteProvisioning only moves when the carrier's imsconfig file exists (some
+     * carriers, e.g. Orange PL, have none) - require it only in that case. */
+    char ims_xml[256];
+    if (ims_resolve_config_path(g_mcc, g_mnc, ims_xml, sizeof(ims_xml)) == 0 &&
+        !pps_check_attribute_contains(PPS_IMS, "allowVoLteProvisioning", "1"))
+        return 0;
+
+    char buf2[512];
+    return read_file(IR92_PATH, buf2, sizeof(buf2)) >= 0 && ims_ir92_applied(buf2, g_ir92_cfg);
 }
 
 static int parse_json_key_value(const char *src, const char *key, char *out_val, size_t max_len)
@@ -291,6 +304,11 @@ static int detect_sim_carrier(void)
         if (parse_json_key_value(hplmn_pos, "mcc", g_mcc, sizeof(g_mcc)) &&
             parse_json_key_value(hplmn_pos, "mnc", g_mnc, sizeof(g_mnc)))
         {
+            g_carrier_id = ims_get_carrier_id(g_mcc, g_mnc);
+            if (ims_load_ir92_config(g_data_path, g_carrier_id, IR92_DEFAULT_CFG,
+                                     g_ir92_cfg, sizeof(g_ir92_cfg)) != 0)
+                snprintf(g_ir92_cfg, sizeof(g_ir92_cfg), "%s", IR92_DEFAULT_CFG);
+            LOG_VERBOSE("SIM carrier mcc=%s mnc=%s carrier_id=%d", g_mcc, g_mnc, g_carrier_id);
             return 1;
         }
     }
@@ -299,22 +317,8 @@ static int detect_sim_carrier(void)
 
 static void find_carrier_xml(char *out_path, size_t max_len)
 {
-    DIR *dir = opendir(g_data_path);
-    if (dir)
-    {
-        struct dirent *ent;
-        while ((ent = readdir(dir)) != NULL)
-        {
-            if (strncmp(ent->d_name, "carrier-", 8) == 0 && strstr(ent->d_name, ".xml"))
-            {
-                snprintf(out_path, max_len, "%s/%s", g_data_path, ent->d_name);
-                closedir(dir);
-                return;
-            }
-        }
-        closedir(dir);
-    }
-    snprintf(out_path, max_len, "%s/carrier-%s-volte.xml", g_data_path, g_mnc);
+    if (ims_find_carrier_profile(g_data_path, g_carrier_id, out_path, max_len) != 0)
+        snprintf(out_path, max_len, "%s/carrier-%s-volte.xml", g_data_path, g_mnc);
 }
 
 static void wait_for_lte(void)
@@ -443,12 +447,11 @@ static void start_ims(void)
 
 static void apply_volte_provisioning(void)
 {
-    if (g_ims_xml_path[0] == '\0')
+    /* Resolve on every call: the carrier's imsconfig file may appear only after ims_rrm runs. */
+    if (ims_resolve_config_path(g_mcc, g_mnc, g_ims_xml_path, sizeof(g_ims_xml_path)) != 0)
     {
-        if (ims_resolve_config_path(g_mcc, g_mnc, g_ims_xml_path, sizeof(g_ims_xml_path)) != 0)
-        {
-            snprintf(g_ims_xml_path, sizeof(g_ims_xml_path), "/var/ims/carrier/imsconfig_0%s.xml", g_mnc);
-        }
+        LOG_VERBOSE("No imsconfig file for mcc=%s mnc=%s, skipping AllowVoLteProvisioning", g_mcc, g_mnc);
+        return;
     }
 
     ims_enable_volte_provisioning(g_ims_xml_path);
@@ -458,8 +461,7 @@ static void write_dca_configs(void)
 {
     mkdir_p("/var/dca/sources/ims/services/carrier_config/ims", 0755);
 
-    const char *ir92_cfg = "@ir92\nUsePreconditions:n:0\nSMS_Format::3GPP\namr_modeset_list::7\namrwb_modeset_list::2\n";
-    write_file(IR92_PATH, ir92_cfg, 0644);
+    write_file(IR92_PATH, g_ir92_cfg[0] ? g_ir92_cfg : IR92_DEFAULT_CFG, 0644);
 
     const char *ims_cfg = "@ims\n"
                           "IMS_services:json:[{\"service\":\"voice\",\"feature_tag\":\"urn:urn-7:3gpp-service.ims.icsi.mmtel\",\"network\":[\"LTE\"]}]\n"
