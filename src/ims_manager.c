@@ -4,6 +4,7 @@
 #include <strings.h>
 #include <unistd.h>
 #include <signal.h>
+#include <errno.h>
 #include <getopt.h>
 
 #include "sys_utils.h"
@@ -28,10 +29,30 @@ static void sigusr1_handler(int sig)
     g_reset_stats_requested = 1;
 }
 
-static void signal_handler(int sig)
+static volatile sig_atomic_t g_stop_signal = 0;
+static volatile sig_atomic_t g_stop_sender = 0;
+static char g_stop_sender_exe[256];
+
+/* The sender may be a short-lived kill or script, so its name is read here, not when logging. */
+static void signal_handler(int sig, siginfo_t *info, void *context)
 {
-    (void)sig;
+    (void)context;
+
+    if (!g_stop_requested)
+    {
+        int saved_errno = errno;
+
+        g_stop_signal = sig;
+        g_stop_sender = info->si_pid;
+        exe_name_signal_safe(info->si_pid, g_stop_sender_exe, sizeof(g_stop_sender_exe));
+        errno = saved_errno;
+    }
     g_stop_requested = 1;
+}
+
+void log_stop_sender(void)
+{
+    log_msg("[BBE] STOP_SIGNAL: sig=%d from pid=%d exe=%s", (int)g_stop_signal, (int)g_stop_sender, g_stop_sender_exe);
 }
 
 static void print_usage(const char *prog_name)
@@ -75,7 +96,8 @@ int main(int argc, char *argv[])
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = signal_handler;
+    sa.sa_sigaction = signal_handler;
+    sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);

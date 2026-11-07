@@ -114,6 +114,60 @@ int find_pid_by_name(const char *name, int strict)
     return found_pid;
 }
 
+/* --- Helpers safe to call from a signal handler: no stdio, no malloc --- */
+
+static void build_exefile_path(char *path, pid_t pid)
+{
+    char digits[12];
+    int count = 0;
+    unsigned int value = (unsigned int)pid;
+
+    do
+    {
+        digits[count++] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+
+    memcpy(path, "/proc/", 6);
+    path += 6;
+    while (count > 0)
+        *path++ = digits[--count];
+    memcpy(path, "/exefile", 9);
+}
+
+static void read_line_signal_safe(const char *path, char *out, size_t size)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    ssize_t len = fd >= 0 ? read(fd, out, size - 1) : -1;
+
+    if (fd >= 0)
+        close(fd);
+
+    if (len <= 0)
+    {
+        memcpy(out, "unknown", 8);
+        return;
+    }
+
+    for (ssize_t i = 0; i < len; i++)
+    {
+        if (out[i] == '\n')
+        {
+            len = i;
+            break;
+        }
+    }
+    out[len] = '\0';
+}
+
+void exe_name_signal_safe(pid_t pid, char *out, size_t size)
+{
+    char path[32];
+
+    build_exefile_path(path, pid);
+    read_line_signal_safe(path, out, size);
+}
+
 int slay_by_cmdline_graceful(const char *search_str, int timeout_ms)
 {
     if (!search_str || strlen(search_str) == 0)

@@ -173,6 +173,7 @@ void exit_if_stopped(void)
 {
     if (g_stop_requested)
     {
+        log_stop_sender();
         stop_lte_monitor();
         stop_berry();
         exit(0);
@@ -186,6 +187,8 @@ int run_until_stopped(void)
         sleep(1);
     }
 
+    if (g_stop_requested)
+        log_stop_sender();
     stop_lte_monitor();
     stop_berry();
     return 0;

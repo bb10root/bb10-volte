@@ -13,4 +13,7 @@ void start_lte_monitor(void);
 void exit_if_stopped(void);
 int run_until_stopped(void);
 
+/* Defined in ims_manager.c, next to the signal handler. */
+void log_stop_sender(void);
+
 #endif /* PPS_MONITOR_H */
