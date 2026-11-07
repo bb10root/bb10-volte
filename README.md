@@ -46,6 +46,8 @@ Even if LTE data works correctly, voice over LTE may not work unless the carrier
 
 Compatibility should be verified on each target device and network.
 
+Outgoing calls use QoS preconditions on every network. Some networks require them: Viettel rejected outgoing calls without them. They have only been tested on Viettel, so if outgoing calls fail on your network while incoming calls work, please report it.
+
 ### Carrier provisioning
 
 The addon keeps its own carrier list and builds the VoLTE profile for your SIM on the phone, so most carriers need no per-carrier file.

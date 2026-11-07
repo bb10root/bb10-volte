@@ -90,7 +90,7 @@ int incoming_ready_pps(void)
         return 0;
 
     char buf2[256];
-    return (read_file(IR92_PATH, buf2, sizeof(buf2)) >= 0 && strstr(buf2, "UsePreconditions:n:0") != NULL);
+    return (read_file(IR92_PATH, buf2, sizeof(buf2)) >= 0 && strstr(buf2, "UsePreconditions:b:true") != NULL);
 }
 
 static int parse_json_key_value(const char *src, const char *key, char *out_val, size_t max_len)

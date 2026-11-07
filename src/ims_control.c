@@ -133,7 +133,7 @@ void write_dca_configs(void)
        0,2,4,7 (AMR-WB 0,1,2) with only 7 (AMR-WB 2), the stock values, left
        incoming calls with no audio from the phone, and the network ended them
        after about 30 seconds. */
-    const char *ir92_cfg = "@ir92\nUsePreconditions:n:0\nSMS_Format::3GPP\namr_modeset_list::0,2,4,7\namrwb_modeset_list::0,1,2\n";
+    const char *ir92_cfg = "@ir92\nUsePreconditions:b:true\nSMS_Format::3GPP\namr_modeset_list::0,2,4,7\namrwb_modeset_list::0,1,2\n";
     write_file(IR92_PATH, ir92_cfg, 0644);
 
     const char *ims_cfg = "@ims\n"
