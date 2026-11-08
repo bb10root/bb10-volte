@@ -11,10 +11,41 @@
 
 /* --- P-CSCF routes --- */
 
-/* ponytail: IPv4 only; extend the character classes if a network gives IPv6 P-CSCFs. */
+/* Each field runs to the next space and ends in a colon, which an IPv6 address can't be told apart from. */
+static int take_address(char *field)
+{
+    size_t len = strlen(field);
+    if (len < 2 || field[len - 1] != ':')
+        return 0;
+    field[--len] = '\0';
+    return strspn(field, "0123456789abcdefABCDEF:.") == len;
+}
+
+/* ims_rrm's failed route command prints "add host <host>: gateway <gateway>: Permission denied".
+   Mobily gives IPv6 P-CSCFs. */
 int parse_route_failure(const char *line, char *host, char *gateway)
 {
-    return sscanf(line, "add host %63[0-9.]: gateway %63[0-9.]: Permission denied", host, gateway) == 2;
+    int end = 0;
+    if (sscanf(line, "add host %63s gateway %63s Permission denied%n", host, gateway, &end) != 2 || end == 0)
+        return 0;
+    return take_address(host) && take_address(gateway);
+}
+
+/* route reads an IPv6 address only after -inet6, and rejects it as "bad value" otherwise. */
+static int run_route(const char *verb, const char *host, const char *gateway, const char *log_path)
+{
+    char *args[7];
+    int n = 0;
+    args[n++] = "route";
+    args[n++] = (char *)verb;
+    if (strchr(host, ':'))
+        args[n++] = "-inet6";
+    args[n++] = "-host";
+    args[n++] = (char *)host;
+    if (gateway)
+        args[n++] = (char *)gateway;
+    args[n] = NULL;
+    return run_cmd_spawn(args, log_path);
 }
 
 /* ims_rrm can't add its P-CSCF routes without root, and reports each failure in
@@ -24,17 +55,33 @@ static char g_route_gateway[64] = "";
 
 static int address_is_local(const char *address)
 {
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    if (inet_pton(AF_INET, address, &sa.sin_addr) != 1)
+    struct sockaddr_in v4;
+    struct sockaddr_in6 v6;
+    struct sockaddr *sa;
+    socklen_t len;
+    memset(&v4, 0, sizeof(v4));
+    memset(&v6, 0, sizeof(v6));
+
+    if (inet_pton(AF_INET, address, &v4.sin_addr) == 1)
+    {
+        v4.sin_family = AF_INET;
+        sa = (struct sockaddr *)&v4;
+        len = sizeof(v4);
+    }
+    else if (inet_pton(AF_INET6, address, &v6.sin6_addr) == 1)
+    {
+        v6.sin6_family = AF_INET6;
+        sa = (struct sockaddr *)&v6;
+        len = sizeof(v6);
+    }
+    else
         return 1;
 
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int fd = socket(sa->sa_family, SOCK_DGRAM, 0);
     if (fd < 0)
         return 1;
 
-    int gone = bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 && errno == EADDRNOTAVAIL;
+    int gone = bind(fd, sa, len) != 0 && errno == EADDRNOTAVAIL;
     close(fd);
     return !gone;
 }
@@ -68,8 +115,7 @@ void delete_stale_ims_routes(void)
         if (!parse_route_failure(line, host, gateway))
             continue;
 
-        char *del_args[] = {"route", "delete", "-host", host, NULL};
-        if (run_cmd_spawn(del_args, route_log) == 0)
+        if (run_route("delete", host, NULL, route_log) == 0)
             log_msg("[BBE] IMS_ROUTE_CLEARED: %s", host);
     }
 
@@ -109,10 +155,8 @@ void add_missing_ims_routes(void)
         /* These static routes outlive an IP change, such as airplane mode. A
            route through the old address makes every connection to the P-CSCF
            fail with "Can't assign requested address". */
-        char *del_args[] = {"route", "delete", "-host", host, NULL};
-        char *add_args[] = {"route", "add", "-host", host, gateway, NULL};
-        int del_status = run_cmd_spawn(del_args, route_log);
-        int add_status = run_cmd_spawn(add_args, route_log);
+        int del_status = run_route("delete", host, NULL, route_log);
+        int add_status = run_route("add", host, gateway, route_log);
         log_msg("[BBE] IMS_ROUTE: %s via %s (del %d, add %d)", host, gateway, del_status, add_status);
         snprintf(g_route_gateway, sizeof(g_route_gateway), "%s", gateway);
     }

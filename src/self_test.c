@@ -68,12 +68,14 @@ int voice_flag_self_test(void)
     if (!parse_route_failure("add host 192.0.2.1: gateway 198.51.100.1: Permission denied\n", host, gateway) ||
         strcmp(host, "192.0.2.1") != 0 || strcmp(gateway, "198.51.100.1") != 0 ||
         parse_route_failure("route: writing to routing socket: Permission denied\n", host, gateway) ||
-        parse_route_failure("add host fd00::1: gateway fd00::2: Permission denied\n", host, gateway))
+        parse_route_failure("delete host fd00::1: Permission denied\n", host, gateway) ||
+        !parse_route_failure("add host fd00::1: gateway fd00::2: Permission denied\n", host, gateway) ||
+        strcmp(host, "fd00::1") != 0 || strcmp(gateway, "fd00::2") != 0)
     {
         fprintf(stderr, "[BBE] route parser self-test failed\n");
         return 1;
     }
 
-    puts("[BBE] Route parser: 3 cases passed");
+    puts("[BBE] Route parser: 4 cases passed");
     return 0;
 }

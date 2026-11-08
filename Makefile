@@ -96,6 +96,8 @@ test:
 	./build/test_radio_reset
 	cc -std=gnu99 -Isrc tests/test_stop_sender.c -o build/test_stop_sender
 	./build/test_stop_sender
+	cc -std=gnu99 -Isrc tests/test_routes.c -o build/test_routes
+	./build/test_routes
 
 # Clean object files, dependency files, binaries, and archive
 clean:
