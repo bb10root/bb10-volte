@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 /* The real header needs QNX's slog2. */
@@ -31,6 +32,7 @@ char g_mcc[4] = "621";
 char g_mnc[4] = "50";
 char g_gid1[41] = "";
 char g_data_path[512] = "/data";
+char g_init_path[512] = "/init";
 
 static char g_home[256];
 static char g_override[600];
@@ -175,6 +177,27 @@ int main(void)
     assert(g_override[0] == '\0');
     assert(g_sleeps <= CARRIER_RELOAD_WAIT_SECONDS);
     assert(strcmp(g_last_log, "[BBE] CARRIER_RELOAD_TIMEOUT") == 0);
+
+    /* A fresh list waits its month, unless the installed binary is newer than it. */
+    char dir[] = "/tmp/reload-test-XXXXXX", db[600], bin[600];
+    assert(mkdtemp(dir));
+    snprintf(g_data_path, sizeof(g_data_path), "%s", dir);
+    snprintf(g_init_path, sizeof(g_init_path), "%s", dir);
+    snprintf(db, sizeof(db), "%s/" CARRIER_DB_NAME, dir);
+    snprintf(bin, sizeof(bin), "%s/ims_manager", dir);
+    fclose(fopen(db, "w"));
+    fclose(fopen(bin, "w"));
+    struct timeval older[2] = {{time(NULL) - 60, 0}, {time(NULL) - 60, 0}};
+    assert(utimes(bin, older) == 0);
+    g_last_log[0] = '\0';
+    assert(refresh_carrier_db(0) == 0);
+    assert(g_last_log[0] == '\0');
+    assert(utimes(db, older) == 0 && utimes(bin, NULL) == 0);
+    assert(refresh_carrier_db(0) == 0);
+    assert(strcmp(g_last_log, "[BBE] CARRIER_DB_UPDATED") == 0 || strcmp(g_last_log, "[BBE] CARRIER_DB_LINKED") == 0);
+    remove(db);
+    remove(bin);
+    rmdir(dir);
 
     puts("carrier reload tests passed");
     return 0;

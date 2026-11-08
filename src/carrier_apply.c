@@ -238,7 +238,12 @@ int refresh_carrier_db(int force)
     snprintf(stock, sizeof(stock), "%s/" CARRIER_STOCK_NAME, g_data_path);
     snprintf(apns, sizeof(apns), "%s/" CARRIER_APNS_NAME, g_data_path);
 
-    if (!force && stat(db, &st) == 0 && time(NULL) - st.st_mtime < CARRIER_DB_MAX_AGE_SECONDS)
+    /* An update can write different APNs from the same download, so it doesn't wait out the old list. */
+    char bin[600];
+    struct stat bin_st;
+    snprintf(bin, sizeof(bin), "%s/ims_manager", g_init_path);
+    if (!force && stat(db, &st) == 0 && time(NULL) - st.st_mtime < CARRIER_DB_MAX_AGE_SECONDS &&
+        !(stat(bin, &bin_st) == 0 && bin_st.st_mtime > st.st_mtime))
         return 0;
 
     if (!path_linked_to(CARRIER_IDS_PATH, db) && ims_carrier_db_save_stock(CARRIER_IDS_PATH, stock) != 0)
