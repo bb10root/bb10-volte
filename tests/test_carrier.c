@@ -32,6 +32,7 @@ static const char k_stock[] =
     "  <row><carrier_id>72</carrier_id><carrier_name>Odd Code</carrier_name><mcc>222</mcc><mnc>072</mnc><efgid></efgid></row>\n"
     "  <row><carrier_id>72</carrier_id><carrier_name>Odd Code</carrier_name><mcc>222</mcc><mnc>073</mnc><efgid></efgid></row>\n"
     "  <row><carrier_id>72</carrier_id><carrier_name>Odd Code</carrier_name><mcc>222</mcc><mnc>074</mnc><efgid></efgid></row>\n"
+    "  <row><carrier_id>75</carrier_id><carrier_name>Two Plans</carrier_name><mcc>222</mcc><mnc>075</mnc><efgid></efgid></row>\n"
     "  <row><carrier_id>24</carrier_id><carrier_name>CDMA</carrier_name><mcc>SID</mcc><mnc>5F5</mnc><efgid></efgid></row>\n"
     "</rows>\n";
 
@@ -54,6 +55,8 @@ static const char k_apns[] =
     "<apn carrier=\"5G\" mcc=\"222\" mnc=\"63\" apn=\"nr.net\" network_type_bitmask=\"20\" type=\"default\"/>"
     "<apn carrier=\"Virtual\" mcc=\"222\" mnc=\"99\" mvno_type=\"spn\" apn=\"virtual.net\" type=\"default\"/>"
     "<apn carrier=\"Host\" mcc=\"222\" mnc=\"99\" apn=\"host.net\" type=\"default\"/>"
+    "<apn carrier=\"Plan 1\" carrier_id=\"3011\" mcc=\"222\" mnc=\"75\" apn=\"web1\" type=\"default,ia,supl\"/>"
+    "<apn carrier=\"Plan 2\" carrier_id=\"3011\" mcc=\"222\" mnc=\"75\" apn=\"web2\" type=\"default,ia,supl\"/>"
     "</apns>";
 
 static const char k_default_config[] =
@@ -133,6 +136,8 @@ static char *build_textpb(void)
         "carrier_id {\n  canonical_id: 3004\n  carrier_name: \"Plain and Limited\"\n"
         "  carrier_attribute {\n    mccmnc_tuple: \"22295\"\n    imsi_prefix_xpattern: \"22295123\"\n  }\n"
         "  carrier_attribute {\n    mccmnc_tuple: \"22294\"\n  }\n}\n"
+        "carrier_id {\n  canonical_id: 3011\n  carrier_name: \"Two Plans\"\n"
+        "  carrier_attribute {\n    mccmnc_tuple: \"22275\"\n  }\n}\n"
         "carrier_id {\n  canonical_id: 3010\n  carrier_name: \"Own APN Unusable\"\n"
         "  carrier_attribute {\n    mccmnc_tuple: \"22271\"\n  }\n}\n"
         "carrier_id {\n  canonical_id: 3005\n  carrier_name: \"GID on Stock Network\"\n"
@@ -286,6 +291,18 @@ int main(void)
     assert(strstr(read_text("own-v6.xml"), "<APN>stock.net</APN>"));
     assert(ims_build_carrier_xml(72, "config", "apns.tsv", "odd.xml") == 0);
     assert(strstr(read_text("odd.xml"), "<APN>stock.net</APN>"));
+
+    /* Android lists one APN per plan: a stock APN among them stays, any other stock APN is replaced. */
+    write_text("config/75.xml", CONFIG_HEAD
+        "<ServiceConfiguration><Name>internet</Name><RadioAccessTechnology><APN>WEB2</APN>"
+        "<Authentication><PAP><Username>s</Username><Password>s</Password></PAP></Authentication>"
+        "</RadioAccessTechnology></ServiceConfiguration>" CONFIG_TAIL);
+    assert(ims_build_carrier_xml(75, "config", "apns.tsv", "plans.xml") == 0);
+    assert(strstr(read_text("plans.xml"), "<APN>WEB2</APN>"));
+    assert(strstr(read_text("plans.xml"), "<Username>s</Username>"));
+    write_text("config/75.xml", stock_apn);
+    assert(ims_build_carrier_xml(75, "config", "apns.tsv", "plans.xml") == 0);
+    assert(strstr(read_text("plans.xml"), "<APN>web1</APN>"));
     assert(ims_build_carrier_xml(BT_ID, "config", "apns.tsv", "gid.xml") == 0);
     assert(strstr(read_text("gid.xml"), "<APN>stock.net</APN>"));
 

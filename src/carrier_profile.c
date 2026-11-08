@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -50,10 +51,10 @@ static const char k_service_templates[] =
 typedef struct
 {
     char name[64];
-    char apn[128];
+    char apn[256];
     char user[128];
     char password[128];
-    char mms_apn[128];
+    char mms_apn[256];
     char mms_user[128];
     char mms_password[128];
 } carrier_apns_t;
@@ -176,6 +177,35 @@ static void set_service_apn(xmlDocPtr doc, xmlNodePtr service, const char *apn, 
     }
 }
 
+/*
+ * list is the Android pick, then any other APNs Android has for the carrier. A stock APN among them is
+ * BlackBerry's choice of the same plans, so it stays with its login; otherwise the pick replaces it.
+ */
+static void set_listed_apn(xmlDocPtr doc, xmlNodePtr service, const char *list, const char *user, const char *password)
+{
+    xmlNodePtr rat = service ? find_child(service, "RadioAccessTechnology") : NULL;
+    xmlNodePtr apn_node = rat ? find_child(rat, "APN") : NULL;
+    xmlChar *stock = apn_node ? xmlNodeGetContent(apn_node) : NULL;
+    size_t stock_len = stock ? strlen((const char *)stock) : 0;
+    char first[128];
+    snprintf(first, sizeof(first), "%.*s", (int)strcspn(list, ","), list);
+
+    /* Stock equal to the pick still takes the pick, with Android's login and spelling. */
+    int keep = 0;
+    if (stock_len && strcasecmp(first, (const char *)stock) != 0)
+    {
+        for (const char *p = list + strcspn(list, ","); *p && !keep; p += strcspn(p, ","))
+        {
+            p++;
+            keep = strcspn(p, ",") == stock_len && strncasecmp(p, (const char *)stock, stock_len) == 0;
+        }
+    }
+    xmlFree(stock);
+
+    if (!keep)
+        set_service_apn(doc, service, first, user, password);
+}
+
 /* Adds a setting where stock configs keep it: after the first of these that the service has. */
 static void add_setting(xmlNodePtr service, const char *name, const char *after_1, const char *after_2)
 {
@@ -296,13 +326,13 @@ static void apply_carrier_apns(xmlDocPtr doc, xmlNodePtr data, xmlDocPtr templat
         set_text(doc, name, apns->name);
 
     if (apns->apn[0] != '\0')
-        set_service_apn(doc, find_named(data, "ServiceConfiguration", "internet"), apns->apn, apns->user, apns->password);
+        set_listed_apn(doc, find_named(data, "ServiceConfiguration", "internet"), apns->apn, apns->user, apns->password);
 
     if (apns->mms_apn[0] != '\0')
     {
         if (!find_named(data, "ServiceConfiguration", "mms"))
             add_service(doc, data, templates, "mms");
-        set_service_apn(doc, find_named(data, "ServiceConfiguration", "mms"), apns->mms_apn, apns->mms_user, apns->mms_password);
+        set_listed_apn(doc, find_named(data, "ServiceConfiguration", "mms"), apns->mms_apn, apns->mms_user, apns->mms_password);
     }
 }
 

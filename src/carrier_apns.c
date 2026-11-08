@@ -255,9 +255,33 @@ static int id_seen_before(const row_list_t *rows, size_t index)
     return 0;
 }
 
-static void write_apn_fields(FILE *f, const apn_t *a)
+static int same_carrier(const apn_t *a, const apn_t *b)
 {
-    fprintf(f, "\t%s\t%s\t%s", a ? a->apn : "", a && a->user ? a->user : "", a && a->password ? a->password : "");
+    return b->carrier_id ? a->carrier_id == b->carrier_id
+                         : !a->carrier_id && !a->mvno && a->mcc == b->mcc && a->mnc == b->mnc;
+}
+
+/*
+ * Android lists several APNs for some carriers, one per plan: Mobily has web1 and web2, and the network
+ * rejects the one a SIM isn't on. So the field lists the others after the pick, comma separated (APN
+ * names can't hold a comma), and the profile keeps the stock APN when it is one of them.
+ */
+static void write_apn_fields(FILE *f, const apn_t *apns, size_t count, const apn_t *a, const char *type)
+{
+    fprintf(f, "\t%s", a ? a->apn : "");
+    for (size_t i = 0; a && i < count; i++)
+    {
+        const apn_t *b = &apns[i];
+        if (!same_carrier(b, a) || !apn_usable(b, type) || strcmp(b->apn, a->apn) == 0)
+            continue;
+
+        size_t j = 0;
+        while (j < i && !(same_carrier(&apns[j], a) && apn_usable(&apns[j], type) && strcmp(apns[j].apn, b->apn) == 0))
+            j++;
+        if (j == i)
+            fprintf(f, ",%s", b->apn);
+    }
+    fprintf(f, "\t%s\t%s", a && a->user ? a->user : "", a && a->password ? a->password : "");
 }
 
 int write_apns(const char *path, const row_list_t *rows, const row_list_t *aosp, const char *apns_xml,
@@ -293,8 +317,8 @@ int write_apns(const char *path, const row_list_t *rows, const row_list_t *aosp,
             snprintf(name, sizeof(name), "%s", row->name);
             name[strcspn(name, "\t\r\n")] = '\0';
             fprintf(f, "%d\t%s", row->id, name);
-            write_apn_fields(f, internet);
-            write_apn_fields(f, mms);
+            write_apn_fields(f, apns, count, internet, "default");
+            write_apn_fields(f, apns, count, mms, "mms");
             fputc('\n', f);
         }
         status = fclose(f) == 0 ? 0 : -1;
