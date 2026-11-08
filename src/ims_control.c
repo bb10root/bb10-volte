@@ -146,11 +146,21 @@ void write_dca_configs(void)
                           "IMS_always_on:b:true\n"
                           /* ponytail: HD Voice on for every network; add per-carrier
                              handling if one rejects AMR-WB. */
-                          "AudioConfig:json:{\"HDvoice\":true}\n"
-                          /* REGISTER is about 1900 bytes. Some network routes drop it as
-                             fragmented UDP, so send large messages over TCP. */
-                          "UDP_max_size:n:1300\n";
-    write_file("/var/dca/sources/ims/services/carrier_config/ims/ims", ims_cfg, 0644);
+                          "AudioConfig:json:{\"HDvoice\":true}\n";
+
+    /* REGISTER is about 1900 bytes. Some network routes drop it as fragmented UDP, so
+       large messages go over TCP. A data/sip-udp file keeps everything on UDP, to test
+       networks whose own requests don't arrive over TCP (Mobily, IPv6).
+       ponytail: a manual switch; make it per network if UDP proves out. */
+    char flag[512];
+    char cfg[1024];
+    snprintf(flag, sizeof(flag), "%s/sip-udp", g_data_path);
+    int udp = access(flag, F_OK) == 0;
+    /* An explicit limit, since a key left out may keep its old value in PPS. */
+    snprintf(cfg, sizeof(cfg), "%sUDP_max_size:n:%d\n", ims_cfg, udp ? 10000 : 1300);
+    if (udp)
+        log_msg("[BBE] SIP_TRANSPORT: UDP");
+    write_file("/var/dca/sources/ims/services/carrier_config/ims/ims", cfg, 0644);
 
     const char *sources[] = {"ims", "ims_defaults", "omadm", "test"};
     const char *cellular_cfg = "@cellular_protocol_configuration\n"
