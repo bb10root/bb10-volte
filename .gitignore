@@ -58,3 +58,9 @@ dkms.conf
 /pkg/init/ims_manager
 /volte.zip
 /build/
+
+# Local notes, tester logs and release zips
+.DS_Store
+/HANDOFF-*.md
+/users-debug/
+/volte-*.zip
