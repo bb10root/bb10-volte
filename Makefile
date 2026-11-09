@@ -14,7 +14,7 @@ TARGET_SO  := $(PKG_DIR)/devnp-volte-swcrypto.so
 
 # Source files
 SRCS_BIN  := ims_manager.c daemon_stats.c system_state.c carrier_apply.c ims_control.c ims_routes.c \
-             ims_reconnect.c voice_flag.c pps_monitor.c self_test.c \
+             ims_reconnect.c voice_flag.c pps_monitor.c self_test.c ims_patch.c \
              ims_carrier_config.c carrier_lookup.c carrier_profile.c \
              ims_carrier_db.c carrier_rows.c carrier_apns.c carrier_fetch.c \
              sys_utils.c log_utils.c file_utils.c proc_utils.c berry_monitor.c
@@ -28,7 +28,7 @@ DEPS      := $(OBJS_BIN:.o=.d) $(OBJS_SO:.o=.d)
 
 # Base CFlags and LDFLags
 CFLAGS    := -std=gnu99 -MMD -MP
-LDFLAGS   := -lxml2 -lcurl -lpps -lslog2 -lsocket
+LDFLAGS   := -lxml2 -lcurl -lpps -lslog2 -lsocket -lz
 
 # Build mode toggle: DEBUG=1 vs Release (default)
 ifeq ($(DEBUG), 1)
@@ -100,6 +100,8 @@ test:
 	./build/test_routes
 	cc -std=gnu99 -Isrc tests/test_stop_signal.c -lpthread -o build/test_stop_signal
 	./build/test_stop_signal
+	cc -std=gnu99 -Isrc tests/test_ims_patch.c -lz -o build/test_ims_patch
+	./build/test_ims_patch
 
 # Clean object files, dependency files, binaries, and archive
 clean:

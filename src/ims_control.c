@@ -1,4 +1,5 @@
 #include "ims_control.h"
+#include "ims_patch.h"
 #include "sys_utils.h"
 #include "ims_carrier_config.h"
 #include "system_state.h"
@@ -75,7 +76,7 @@ void start_ims(void)
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSID);
 
     char *args[] = {
-        "on", "-d", "/radio/bin/ims_rrm",
+        "on", "-d", (char *)ims_rrm_binary(),
         "-U", "453:31,80,387,427,521,1001",
         NULL};
 
