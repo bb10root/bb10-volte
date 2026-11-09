@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <signal.h>
 
 char g_init_path[512] = {0};
 char g_data_path[512] = {0};
@@ -39,4 +40,19 @@ void init_addon_paths(void)
             snprintf(g_data_path, sizeof(g_data_path), "./data");
         }
     }
+}
+
+/* Workers block SIGTERM and SIGINT, so a stop signal always reaches the main thread
+ * and interrupts its sleep at once. */
+int start_worker(pthread_t *thread, void *(*fn)(void *))
+{
+    sigset_t stop, old;
+    sigemptyset(&stop);
+    sigaddset(&stop, SIGTERM);
+    sigaddset(&stop, SIGINT);
+
+    pthread_sigmask(SIG_BLOCK, &stop, &old);
+    int rc = pthread_create(thread, NULL, fn, NULL);
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
+    return rc;
 }

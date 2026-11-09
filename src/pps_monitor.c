@@ -77,7 +77,11 @@ static void *detailed_pps_monitor_thread(void *arg)
         sync_voice_flag(1);
         check_ims_health(&was_ready);
 
-        int poll_res = poll(pfds, FD_COUNT, 1000);
+        /* PPS changes wake this at once; the timeout only drives the periodic checks.
+           Poll each second only while waiting for IMS, so STATS_OK times recovery. The
+           timeout also bounds how long stop_lte_monitor() waits. */
+        int timeout_ms = (!was_ready && is_state_ready(&g_current_state)) ? 1000 : 5000;
+        int poll_res = poll(pfds, FD_COUNT, timeout_ms);
 
         if (poll_res < 0)
         {
@@ -155,7 +159,7 @@ void start_lte_monitor(void)
     if (!g_lte_monitor_running)
     {
         g_lte_monitor_running = 1;
-        pthread_create(&g_lte_thread, NULL, detailed_pps_monitor_thread, NULL);
+        start_worker(&g_lte_thread, detailed_pps_monitor_thread);
     }
 }
 
@@ -182,9 +186,12 @@ void exit_if_stopped(void)
 
 int run_until_stopped(void)
 {
+    /* A stop signal interrupts sleep(), since only this thread takes it (start_worker).
+       ponytail: a signal landing between the check and sleep() waits out the 60 s;
+       sigsuspend() with the signal blocked closes that if it ever matters. */
     while (g_berry_running && !g_stop_requested)
     {
-        sleep(1);
+        sleep(60);
     }
 
     if (g_stop_requested)

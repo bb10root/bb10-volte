@@ -254,7 +254,7 @@ void start_berry(void)
         mkdir_p(RUN_PATH, 0755);
         /* Set before the thread exists: main exits as soon as it reads 0. */
         g_berry_running = 1;
-        if (pthread_create(&g_berry_thread, NULL, berry_monitor_thread, NULL) != 0)
+        if (start_worker(&g_berry_thread, berry_monitor_thread) != 0)
         {
             g_berry_running = 0;
             LOG_VERBOSE("Failed to start berry monitor thread");

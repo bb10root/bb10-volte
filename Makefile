@@ -98,6 +98,8 @@ test:
 	./build/test_stop_sender
 	cc -std=gnu99 -Isrc tests/test_routes.c -o build/test_routes
 	./build/test_routes
+	cc -std=gnu99 -Isrc tests/test_stop_signal.c -lpthread -o build/test_stop_signal
+	./build/test_stop_signal
 
 # Clean object files, dependency files, binaries, and archive
 clean:
