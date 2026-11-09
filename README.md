@@ -111,12 +111,7 @@ Execute the AutoRoot installer with the path to the ZIP archive:
 
 Replace `/path/to/volte.zip` with the actual path to the transferred archive.
 
-When upgrading, stop the daemon first and wait until it has exited. Otherwise the installer can report success without replacing the binary:
-
-```bash
-slay ims_manager
-pidin arg | grep '[i]ms_manager'   # repeat until this prints nothing
-```
+Upgrading works the same way, with the daemon still running. The installer can't replace a running binary, so the package also carries it as `ims_manager.new`; `start.sh` stops the old daemon, moves the new one into place and logs `[BBE] UPDATED` in `/var/log/installer.log`. If it logs `[BBE] UPDATE_FAILED` instead, reboot and install again.
 
 ### 5. Verify functionality
 

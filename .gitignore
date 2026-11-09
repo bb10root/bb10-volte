@@ -56,6 +56,7 @@ dkms.conf
 
 # Build outputs
 /pkg/init/ims_manager
+/pkg/init/ims_manager.new
 /volte.zip
 /build/
 

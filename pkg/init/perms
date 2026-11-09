@@ -1,3 +1,4 @@
 devnp-volte-swcrypto.so:0:0:0755
 ims_manager:0:0:0755
 start.sh:0:0:0755
+ims_manager.new:0:0:0755

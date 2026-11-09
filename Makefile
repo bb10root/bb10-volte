@@ -77,7 +77,9 @@ $(TARGET_SO): $(OBJS_SO) | $(PKG_DIR)
 -include $(DEPS)
 
 # Pack everything inside pkg/ directory into archive
+# The second copy is what an update installs while the old daemon is running; start.sh moves it in.
 package: $(TARGET_BIN) $(TARGET_SO)
+	cp $(TARGET_BIN) $(TARGET_BIN).new
 	@echo "[*] Creating archive $(ZIP_NAME)..."
 	@cd pkg && $(ZIP) -r -q ../$(ZIP_NAME) ./*
 	@echo "[+] All done! Package created: $(ZIP_NAME)"
@@ -104,11 +106,12 @@ test:
 	./build/test_ims_patch
 	cc -std=gnu99 -Isrc -Itests/qnx tests/test_sim_carrier.c -o build/test_sim_carrier
 	./build/test_sim_carrier
+	sh tests/test_start.sh
 
 # Clean object files, dependency files, binaries, and archive
 clean:
 	@echo "[*] Cleaning build artifacts..."
-	rm -f $(OBJS_BIN) $(OBJS_SO) $(DEPS) $(TARGET_BIN) $(TARGET_SO) $(ZIP_NAME)
+	rm -f $(OBJS_BIN) $(OBJS_SO) $(DEPS) $(TARGET_BIN) $(TARGET_BIN).new $(TARGET_SO) $(ZIP_NAME)
 
 help:
 	@echo "Usage:"
