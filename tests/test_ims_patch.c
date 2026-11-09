@@ -28,7 +28,8 @@ int run_cmd_spawn(char *const argv[], const char *log_path)
 }
 
 #define REAL_BINARY "re/q10/ims_rrm"
-#define SIZE (0x2086b0 + 16)
+#define SIZE (0x24c702 + 16)
+#define COUNT (sizeof(patches) / sizeof(patches[0]))
 
 static void put(unsigned char *buf, size_t i, int to)
 {
@@ -56,10 +57,14 @@ static void check_buffer(void)
     put(buf, 1, 0);
     assert(ims_patch_buffer(buf, 0xd9ffa + 1) == -1);
 
-    /* Both match */
+    /* All match */
+    for (size_t i = 2; i < COUNT; i++)
+        put(buf, i, 0);
     assert(ims_patch_buffer(buf, SIZE) == 0);
     assert(memcmp(buf + 0x2086ae, "\x0d\xe0", 2) == 0);
     assert(memcmp(buf + 0xd9ffa, "\x00\xbf", 2) == 0);
+    assert(memcmp(buf + 0x24c6d8, "\x01\x21", 2) == 0);
+    assert(memcmp(buf + 0x24c700, "\x01\x21", 2) == 0);
 
     free(buf);
     free(copy);
