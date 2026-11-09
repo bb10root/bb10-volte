@@ -42,14 +42,15 @@ void init_addon_paths(void)
     }
 }
 
-/* Workers block SIGTERM and SIGINT, so a stop signal always reaches the main thread
- * and interrupts its sleep at once. */
+/* Workers block SIGTERM, SIGINT and SIGHUP, so a stop or restart signal always reaches
+ * the main thread and interrupts its sleep at once. */
 int start_worker(pthread_t *thread, void *(*fn)(void *))
 {
     sigset_t stop, old;
     sigemptyset(&stop);
     sigaddset(&stop, SIGTERM);
     sigaddset(&stop, SIGINT);
+    sigaddset(&stop, SIGHUP);
 
     pthread_sigmask(SIG_BLOCK, &stop, &old);
     int rc = pthread_create(thread, NULL, fn, NULL);

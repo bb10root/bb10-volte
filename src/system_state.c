@@ -113,22 +113,18 @@ static int parse_json_key_value(const char *src, const char *key, char *out_val,
     return i > 0;
 }
 
-static int detect_sim_carrier(void)
+int parse_sim_carrier(const char *buf, char *mcc, size_t mcc_len, char *mnc, size_t mnc_len, char *gid1, size_t gid1_len)
 {
-    char buf[2048];
-    if (read_file(PPS_UICC_PATH, buf, sizeof(buf)) < 0)
-        return 0;
-
     /* A SIM may have no GID1, and carriers then match on the network alone. */
-    const char *gid1 = strstr(buf, "gid1::");
-    g_gid1[0] = '\0';
-    if (gid1)
+    const char *gid1_pos = strstr(buf, "gid1::");
+    gid1[0] = '\0';
+    if (gid1_pos)
     {
-        size_t len = strspn(gid1 + 6, "0123456789abcdefABCDEF");
-        if (len < sizeof(g_gid1))
+        size_t len = strspn(gid1_pos + 6, "0123456789abcdefABCDEF");
+        if (len < gid1_len)
         {
-            memcpy(g_gid1, gid1 + 6, len);
-            g_gid1[len] = '\0';
+            memcpy(gid1, gid1_pos + 6, len);
+            gid1[len] = '\0';
         }
     }
 
@@ -138,13 +134,40 @@ static int detect_sim_carrier(void)
 
     if (hplmn_pos)
     {
-        if (parse_json_key_value(hplmn_pos, "mcc", g_mcc, sizeof(g_mcc)) &&
-            parse_json_key_value(hplmn_pos, "mnc", g_mnc, sizeof(g_mnc)))
+        if (parse_json_key_value(hplmn_pos, "mcc", mcc, mcc_len) &&
+            parse_json_key_value(hplmn_pos, "mnc", mnc, mnc_len))
         {
             return 1;
         }
     }
     return 0;
+}
+
+static int detect_sim_carrier(void)
+{
+    char buf[2048];
+    if (read_file(PPS_UICC_PATH, buf, sizeof(buf)) < 0)
+        return 0;
+
+    return parse_sim_carrier(buf, g_mcc, sizeof(g_mcc), g_mnc, sizeof(g_mnc), g_gid1, sizeof(g_gid1));
+}
+
+/* Polled by the monitor: a SIM from another carrier needs the startup path again. */
+int sim_carrier_changed(void)
+{
+    char buf[2048];
+    char mcc[sizeof(g_mcc)], mnc[sizeof(g_mnc)], gid1[sizeof(g_gid1)];
+
+    if (read_file(PPS_UICC_PATH, buf, sizeof(buf)) < 0 ||
+        !pps_check_attribute_contains(PPS_UICC_PATH, "uicc_state", "READY") ||
+        !parse_sim_carrier(buf, mcc, sizeof(mcc), mnc, sizeof(mnc), gid1, sizeof(gid1)))
+        return 0;
+
+    if (strcmp(mcc, g_mcc) == 0 && strcmp(mnc, g_mnc) == 0 && strcmp(gid1, g_gid1) == 0)
+        return 0;
+
+    log_msg("[BBE] SIM_CHANGED: mcc=%s mnc=%s (was %s %s)", mcc, mnc, g_mcc, g_mnc);
+    return 1;
 }
 
 static void wait_for_lte(void)

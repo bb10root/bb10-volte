@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -104,6 +105,14 @@ static void *detailed_pps_monitor_thread(void *arg)
 
         system_state_t new_state = get_current_system_state();
 
+        /* Another carrier's SIM needs the whole startup path: its XML, the reload and a new ims_rrm. */
+        if (new_state.sim_ok && sim_carrier_changed())
+        {
+            g_restart_requested = 1;
+            kill(getpid(), SIGHUP); /* wakes the main thread's sleep() */
+            break;
+        }
+
         if (new_state.lte_ok != g_current_state.lte_ok ||
             new_state.sim_ok != g_current_state.sim_ok ||
             new_state.data_ok != g_current_state.data_ok)
@@ -189,7 +198,7 @@ int run_until_stopped(void)
     /* A stop signal interrupts sleep(), since only this thread takes it (start_worker).
        ponytail: a signal landing between the check and sleep() waits out the 60 s;
        sigsuspend() with the signal blocked closes that if it ever matters. */
-    while (g_berry_running && !g_stop_requested)
+    while (g_berry_running && !g_stop_requested && !g_restart_requested)
     {
         sleep(60);
     }
@@ -198,5 +207,17 @@ int run_until_stopped(void)
         log_stop_sender();
     stop_lte_monitor();
     stop_berry();
+
+    if (g_restart_requested && !g_stop_requested)
+    {
+        /* Same process and pid: the startup path then waits for the new SIM, builds and
+           reloads its XML and restarts ims_rrm, as a reboot would. */
+        char self[600];
+        snprintf(self, sizeof(self), "%s/ims_manager", g_init_path);
+        char *args[] = {self, "-a", "enable", "-r", NULL};
+        log_msg("[BBE] RESTARTING_FOR_SIM");
+        execv(self, args);
+        log_msg("[BBE] RESTART_FAILED: %d", errno);
+    }
     return 0;
 }

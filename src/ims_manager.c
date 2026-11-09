@@ -19,6 +19,7 @@
 
 /* Set by signal handlers, acted on by the main and monitor threads. */
 volatile sig_atomic_t g_stop_requested = 0;
+volatile sig_atomic_t g_restart_requested = 0;
 volatile sig_atomic_t g_reset_stats_requested = 0;
 
 /* --- Signal Handlers & Usage --- */
@@ -27,6 +28,12 @@ static void sigusr1_handler(int sig)
 {
     (void)sig;
     g_reset_stats_requested = 1;
+}
+
+static void sighup_handler(int sig)
+{
+    (void)sig;
+    g_restart_requested = 1;
 }
 
 static volatile sig_atomic_t g_stop_signal = 0;
@@ -107,6 +114,12 @@ int main(int argc, char *argv[])
     sa_usr1.sa_handler = sigusr1_handler;
     sigemptyset(&sa_usr1.sa_mask);
     sigaction(SIGUSR1, &sa_usr1, NULL);
+
+    struct sigaction sa_hup;
+    memset(&sa_hup, 0, sizeof(sa_hup));
+    sa_hup.sa_handler = sighup_handler;
+    sigemptyset(&sa_hup.sa_mask);
+    sigaction(SIGHUP, &sa_hup, NULL);
 
     static struct option long_options[] = {
         {"action", required_argument, 0, 'a'},

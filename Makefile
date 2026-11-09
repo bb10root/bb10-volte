@@ -102,6 +102,8 @@ test:
 	./build/test_stop_signal
 	cc -std=gnu99 -Isrc tests/test_ims_patch.c -lz -o build/test_ims_patch
 	./build/test_ims_patch
+	cc -std=gnu99 -Isrc -Itests/qnx tests/test_sim_carrier.c -o build/test_sim_carrier
+	./build/test_sim_carrier
 
 # Clean object files, dependency files, binaries, and archive
 clean:

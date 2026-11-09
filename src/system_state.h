@@ -1,6 +1,8 @@
 #ifndef SYSTEM_STATE_H
 #define SYSTEM_STATE_H
 
+#include <stddef.h>
+
 #define PPS_RADIO_PATH "/pps/services/cellular/radioctrl/status_public"
 #define PPS_UICC_PATH "/pps/services/cellular/uicc/card0/status_private"
 #define PPS_DATA_PATH "/pps/services/cds/cnice/status_persistent"
@@ -24,6 +26,8 @@ system_state_t get_current_system_state(void);
 int is_state_ready(const system_state_t *st);
 void log_state_transition(system_state_t old_st, system_state_t new_st);
 int incoming_ready_pps(void);
+int parse_sim_carrier(const char *buf, char *mcc, size_t mcc_len, char *mnc, size_t mnc_len, char *gid1, size_t gid1_len);
+int sim_carrier_changed(void);
 void ready_check(void);
 void wait_until_ready(void);
 

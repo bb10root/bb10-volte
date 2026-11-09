@@ -29,7 +29,7 @@ static int g_worker_ok = 0;
 static void *worker(void *arg)
 {
     (void)arg;
-    g_worker_ok = blocked(SIGTERM) && blocked(SIGINT) && !blocked(SIGUSR1);
+    g_worker_ok = blocked(SIGTERM) && blocked(SIGINT) && blocked(SIGHUP) && !blocked(SIGUSR1);
     return NULL;
 }
 
@@ -41,7 +41,7 @@ int main(void)
     pthread_join(t, NULL);
 
     assert(g_worker_ok);
-    assert(!blocked(SIGTERM) && !blocked(SIGINT));
+    assert(!blocked(SIGTERM) && !blocked(SIGINT) && !blocked(SIGHUP));
     printf("test_stop_signal: ok\n");
     return 0;
 }
