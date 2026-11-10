@@ -1,8 +1,7 @@
 #include "ims_carrier_config.h"
+#include "carrier_lookup.h"
 
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 #include <dirent.h>
 
@@ -134,7 +133,7 @@ int ims_resolve_config_path(const char *mcc, const char *mnc, char *out_path, si
     if (!out_path || max_len == 0)
         return -1;
 
-    int carrier_id = ims_get_carrier_id(mcc, mnc);
+    int carrier_id = ims_get_carrier_id(mcc, mnc, gid1);
     if (carrier_id > 0)
     {
         snprintf(out_path, max_len, "%s/imsconfig_%d.xml", IMS_CONFIG_DIR, carrier_id);

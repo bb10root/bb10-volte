@@ -1,23 +1,26 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <signal.h>
-#include <dirent.h>
+#include <errno.h>
 #include <getopt.h>
-#include <spawn.h>
-#include <fcntl.h>
-#include <poll.h>
-#include <time.h>
-#include <pthread.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <sys/pps.h>
-#include <sys/slog2.h>
 
 #include "sys_utils.h"
 #include "berry_monitor.h"
-#include "ims_carrier_config.h"
+#include "carrier_apply.h"
+#include "daemon_stats.h"
+#include "ims_control.h"
+#include "ims_reconnect.h"
+#include "pps_monitor.h"
+#include "self_test.h"
+#include "system_state.h"
+
+/* Set by signal handlers, acted on by the main and monitor threads. */
+volatile sig_atomic_t g_stop_requested = 0;
+volatile sig_atomic_t g_restart_requested = 0;
+volatile sig_atomic_t g_reset_stats_requested = 0;
 
 #define IR92_PATH "/var/dca/sources/ims/services/carrier_config/ims/ir92"
 /* Overridden per carrier by <data>/ir92-<carrierID> (see ims_load_ir92_config) */
@@ -508,198 +511,50 @@ static int wait_connected(void)
     return 0;
 }
 
-static int run_berry_check(void)
-{
-    char icon_buf[4096];
-    int desired = ims_connected_pps();
-    int actual = (read_file(PPS_ICON, icon_buf, sizeof(icon_buf)) > 0) ? icon_state(icon_buf) : -1;
-    printf("[BBE] VoLTE_connected=%d berry_state=%d\n", desired, actual);
-    return (desired == actual) ? 0 : 1;
-}
-
-/* --- Reconnection Logic with Exponential Backoff --- */
-
-static int reconnect_ims_with_backoff(void)
-{
-    int attempt = 1;
-    int backoff = INITIAL_BACKOFF_SEC;
-
-    while (g_lte_monitor_running && attempt <= MAX_RETRY_ATTEMPTS)
-    {
-        system_state_t check_st = get_current_system_state();
-        if (!is_state_ready(&check_st))
-        {
-            LOG_VERBOSE("Aborting IMS reconnect sequence: system state lost during retry");
-            return 0;
-        }
-
-        LOG_VERBOSE("Attempting IMS reconnect (Attempt %d/%d)...", attempt, MAX_RETRY_ATTEMPTS);
-        log_msg("[BBE] RECONNECT_ATTEMPT:%d", attempt);
-
-        stop_ims();
-        apply_volte_provisioning();
-        start_ims();
-
-        if (wait_connected() && incoming_ready_pps())
-        {
-            log_msg("[BBE] CONNECTED");
-            LOG_VERBOSE("IMS successfully connected on attempt %d", attempt);
-            return 1;
-        }
-
-        log_msg("[BBE] RECONNECT_FAILED_WAITING:%ds", backoff);
-        LOG_VERBOSE("Reconnect attempt %d failed. Retrying in %d seconds...", attempt, backoff);
-
-        for (int elapsed = 0; elapsed < backoff && g_lte_monitor_running; elapsed++)
-        {
-            sleep(1);
-        }
-
-        backoff *= 2;
-        if (backoff > MAX_BACKOFF_SEC)
-        {
-            backoff = MAX_BACKOFF_SEC;
-        }
-
-        attempt++;
-    }
-
-    log_msg("[BBE] RECONNECT_GAVE_UP");
-    LOG_VERBOSE("Exceeded maximum reconnect attempts. Waiting for next system state event.");
-    return 0;
-}
-
-/* --- Background Multi-PPS Monitor Thread --- */
-
-static void *detailed_pps_monitor_thread(void *arg)
-{
-    (void)arg;
-    struct pollfd pfds[FD_COUNT];
-    const char *paths[FD_COUNT] = {PPS_RADIO_PATH, PPS_UICC_PATH, PPS_DATA_PATH};
-
-    for (int i = 0; i < FD_COUNT; i++)
-    {
-        pfds[i].fd = open(paths[i], O_RDONLY | O_NONBLOCK);
-        pfds[i].events = POLLIN | POLLPRI;
-
-        if (pfds[i].fd < 0)
-        {
-            LOG_VERBOSE("Failed to open PPS: %s", paths[i]);
-            for (int j = 0; j < i; j++)
-                close(pfds[j].fd);
-            return NULL;
-        }
-    }
-
-    g_current_state = get_current_system_state();
-    int was_ready = is_state_ready(&g_current_state);
-
-    LOG_VERBOSE("Detailed PPS monitor started. Initial state -> LTE:%d, SIM:%d, Data:%d",
-                g_current_state.lte_ok, g_current_state.sim_ok, g_current_state.data_ok);
-
-    while (g_lte_monitor_running)
-    {
-        int poll_res = poll(pfds, FD_COUNT, 1000);
-
-        if (poll_res < 0)
-            break;
-        if (poll_res == 0)
-            continue;
-
-        for (int i = 0; i < FD_COUNT; i++)
-        {
-            if (pfds[i].revents & (POLLIN | POLLPRI))
-            {
-                char buf[1024];
-                ssize_t bytes = read(pfds[i].fd, buf, sizeof(buf) - 1);
-                (void)bytes;
-            }
-        }
-
-        system_state_t new_state = get_current_system_state();
-
-        if (new_state.lte_ok != g_current_state.lte_ok ||
-            new_state.sim_ok != g_current_state.sim_ok ||
-            new_state.data_ok != g_current_state.data_ok)
-        {
-            log_state_transition(g_current_state, new_state);
-
-            int is_ready = is_state_ready(&new_state);
-
-            if (was_ready && !is_ready)
-            {
-                stats_on_drop();
-                stop_ims();
-                was_ready = 0;
-            }
-            else if (!was_ready && is_ready)
-            {
-                log_msg("[BBE] RESTORED: STARTING_RECONNECT");
-
-                if (reconnect_ims_with_backoff())
-                {
-                    stats_on_success();
-                    was_ready = 1;
-                }
-                else
-                {
-                    stats_on_failure();
-                    was_ready = 0;
-                }
-            }
-
-            g_current_state = new_state;
-        }
-    }
-
-    for (int i = 0; i < FD_COUNT; i++)
-    {
-        close(pfds[i].fd);
-    }
-
-    return NULL;
-}
-
-static void start_lte_monitor(void)
-{
-    if (!g_lte_monitor_running)
-    {
-        g_lte_monitor_running = 1;
-        pthread_create(&g_lte_thread, NULL, detailed_pps_monitor_thread, NULL);
-    }
-}
-
-static void stop_lte_monitor(void)
-{
-    if (g_lte_monitor_running)
-    {
-        g_lte_monitor_running = 0;
-        pthread_join(g_lte_thread, NULL);
-    }
-}
-
-/* --- Signal Handlers & Usage --- */
-
 static void sigusr1_handler(int sig)
 {
     (void)sig;
-    stats_reset();
-    stats_export_to_file();
+    g_reset_stats_requested = 1;
 }
 
-static void signal_handler(int sig)
+static void sighup_handler(int sig)
 {
     (void)sig;
-    stop_lte_monitor();
-    stop_berry();
-    exit(0);
+    g_restart_requested = 1;
+}
+
+static volatile sig_atomic_t g_stop_signal = 0;
+static volatile sig_atomic_t g_stop_sender = 0;
+static char g_stop_sender_exe[256];
+
+/* The sender may be a short-lived kill or script, so its name is read here, not when logging. */
+static void signal_handler(int sig, siginfo_t *info, void *context)
+{
+    (void)context;
+
+    if (!g_stop_requested)
+    {
+        int saved_errno = errno;
+
+        g_stop_signal = sig;
+        g_stop_sender = info->si_pid;
+        exe_name_signal_safe(info->si_pid, g_stop_sender_exe, sizeof(g_stop_sender_exe));
+        errno = saved_errno;
+    }
+    g_stop_requested = 1;
+}
+
+void log_stop_sender(void)
+{
+    log_msg("[BBE] STOP_SIGNAL: sig=%d from pid=%d exe=%s", (int)g_stop_signal, (int)g_stop_sender, g_stop_sender_exe);
 }
 
 static void print_usage(const char *prog_name)
 {
     printf("Usage: %s [options]\n", prog_name);
     printf("Options:\n");
-    printf("  -a, --action <check|probe|enable>   Action to perform (default: check)\n");
+    printf("  -a, --action <check|probe|enable|provision>\n");
+    printf("                                      Action to perform (default: check)\n");
     printf("  -r, --refresh                       Force refresh settings during enable\n");
     printf("  -v, --verbose                       Enable verbose logging output\n");
     printf("      --self-test                     Run built-in PPS decoder unit tests\n");
@@ -707,6 +562,21 @@ static void print_usage(const char *prog_name)
     printf("      --stats                         Print connection statistics\n");
     printf("      --reset-stats                   Reset statistics counters\n");
     printf("  -h, --help                          Show this help message\n");
+}
+
+/* A running daemon owns the counters and would overwrite a reset done here. */
+static void reset_stats_cli(void)
+{
+    int daemon_pid = berry_daemon_pid();
+    if (daemon_pid > 0 && kill(daemon_pid, SIGUSR1) == 0)
+    {
+        printf("[BBE] Statistics reset requested from daemon PID %d.\n", daemon_pid);
+        return;
+    }
+
+    stats_reset();
+    stats_export_to_file();
+    printf("[BBE] Statistics reset successfully.\n");
 }
 
 /* --- Main Entry Point --- */
@@ -720,7 +590,8 @@ int main(int argc, char *argv[])
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = signal_handler;
+    sa.sa_sigaction = signal_handler;
+    sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
@@ -730,6 +601,12 @@ int main(int argc, char *argv[])
     sa_usr1.sa_handler = sigusr1_handler;
     sigemptyset(&sa_usr1.sa_mask);
     sigaction(SIGUSR1, &sa_usr1, NULL);
+
+    struct sigaction sa_hup;
+    memset(&sa_hup, 0, sizeof(sa_hup));
+    sa_hup.sa_handler = sighup_handler;
+    sigemptyset(&sa_hup.sa_mask);
+    sigaction(SIGHUP, &sa_hup, NULL);
 
     static struct option long_options[] = {
         {"action", required_argument, 0, 'a'},
@@ -769,16 +646,14 @@ int main(int argc, char *argv[])
                 g_verbose = 1;
                 break;
             case 1001:
-                return self_test();
+                return self_test() || voice_flag_self_test();
             case 1002:
                 return run_berry_check();
             case 1003:
                 stats_print_cli();
                 return 0;
             case 1004:
-                stats_reset();
-                stats_export_to_file();
-                printf("[BBE] Statistics reset successfully.\n");
+                reset_stats_cli();
                 return 0;
             case 'h':
                 print_usage(argv[0]);
@@ -807,9 +682,14 @@ int main(int argc, char *argv[])
             log_msg("[BBE] SIM_LTE_OK");
         }
         log_msg("[BBE] %s", ims_connected_pps() ? "CONNECTED" : "NOT_CONNECTED");
-        log_msg("[BBE] %s", g_berry_running ? "BERRY_RUNNING" : "BERRY_STOPPED");
+        log_msg("[BBE] %s", berry_daemon_pid() > 0 ? "BERRY_RUNNING" : "BERRY_STOPPED");
         log_msg("[BBE] %s", incoming_ready_pps() ? "INCOMING_READY" : "INCOMING_NOT_READY");
         return 0;
+    }
+
+    if (strcasecmp(action, "provision") == 0)
+    {
+        return refresh_carrier_db(1) == 0 ? 0 : 1;
     }
 
     if (strcasecmp(action, "enable") != 0)
@@ -817,8 +697,12 @@ int main(int argc, char *argv[])
         bbe_exit_fail("ACTION_INVALID", 1);
     }
 
-    ready_check();
+    link_carrier_db();
+
+    wait_until_ready();
     LOG_VERBOSE("Ready check passed successfully");
+
+    refresh_carrier_db(0);
 
     provider_enable();
     LOG_VERBOSE("Provider enabled successfully");
@@ -826,17 +710,12 @@ int main(int argc, char *argv[])
     if (ims_connected_pps() && incoming_ready_pps() && !force_refresh)
     {
         LOG_VERBOSE("IMS and incoming services already connected, starting background monitors");
+        apply_carrier_xml();
         start_berry();
         start_lte_monitor();
         log_msg("[BBE] ALREADY_CONNECTED");
 
-        while (g_berry_running)
-        {
-            sleep(1);
-        }
-
-        stop_lte_monitor();
-        return 0;
+        return run_until_stopped();
     }
 
     log_msg("[BBE] APPLYING");
@@ -844,7 +723,6 @@ int main(int argc, char *argv[])
     LOG_VERBOSE("DCA configs written");
 
     apply_volte_provisioning();
-    LOG_VERBOSE("VoLTE provisioning applied via XML");
 
     char log_file[512];
     snprintf(log_file, sizeof(log_file), "%s/dca-enable.log", RUN_PATH);
@@ -860,14 +738,10 @@ int main(int argc, char *argv[])
         bbe_exit_fail("DCA_FAILED", 1);
     }
 
-    char carrier_xml[512];
-    find_carrier_xml(carrier_xml, sizeof(carrier_xml));
-    chmod(carrier_xml, 0644);
-    LOG_VERBOSE("Carrier XML resolved to: %s", carrier_xml);
-
-    char cmd_buf[512];
-    snprintf(cmd_buf, sizeof(cmd_buf), "cdsc_xml::%s\n", carrier_xml);
-    append_file("/pps/services/cds/cnice/status_persistent", cmd_buf);
+    if (!apply_carrier_xml())
+    {
+        log_msg("[BBE] CARRIER_XML_NOT_FOUND: mcc=%s mnc=%s", g_mcc, g_mnc);
+    }
     append_file("/pps/services/escreens/config", "voice_domain_preference_EUTRAN_override::5\n");
 
     LOG_VERBOSE("Restarting IMS and starting berry monitor thread...");
@@ -875,33 +749,34 @@ int main(int argc, char *argv[])
     start_ims();
     start_berry();
 
-    if (!wait_connected())
-        bbe_exit_fail("REGISTER_TIMEOUT", 1);
+    int connected = wait_connected();
+    exit_if_stopped();
 
-    if (!incoming_ready_pps())
+    /* Without an imsconfig file a restart can't help, and it drops the registration. */
+    if (connected && !incoming_ready_pps() && access(g_ims_xml_path, F_OK) == 0)
     {
         LOG_VERBOSE("Incoming state not ready after first attempt, retrying...");
         log_msg("[BBE] INCOMING_RETRY");
         stop_ims();
         apply_volte_provisioning();
         start_ims();
-        if (!wait_connected())
-            bbe_exit_fail("REGISTER_TIMEOUT", 1);
+        connected = wait_connected();
+        exit_if_stopped();
     }
 
-    if (!incoming_ready_pps())
-        bbe_exit_fail("INCOMING_FAILED", 1);
+    if (connected)
+    {
+        log_msg("[BBE] CONNECTED");
+        if (!incoming_ready_pps())
+            log_msg("[BBE] INCOMING_NOT_READY");
+    }
+    else
+    {
+        log_msg("[BBE] NOT_CONNECTED: monitor will retry");
+    }
 
-    log_msg("[BBE] CONNECTED");
-
-    /* Start background monitoring thread after initial successful connection */
+    /* The monitor also retries when the first registration did not succeed. */
     start_lte_monitor();
 
-    while (g_berry_running)
-    {
-        sleep(1);
-    }
-
-    stop_lte_monitor();
-    return 0;
+    return run_until_stopped();
 }

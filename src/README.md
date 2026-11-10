@@ -5,7 +5,7 @@
 
 ### Key Operational Features
 * **Event-Driven PPS Monitoring:** Real-time multi-descriptor polling (`poll()`) tracking cellular radio technology, SIM readiness, and data connection status.
-* **Automatic Reconnection:** Self-healing mechanism with exponential backoff strategy when network conditions fluctuate.
+* **Automatic Reconnection:** Self-healing mechanism with exponential backoff strategy when network conditions fluctuate, or when `ims_rrm` dies or loses registration while they stay up.
 * **Slog2 & File Logging:** Structured logging via QNX `slog2` subsystem and real-time state exports.
 * **POSIX Signal Handling:** Graceful termination on `SIGTERM`/`SIGINT` and runtime statistics reset via `SIGUSR1`.
 * **CLI Diagnostics:** Native execution flags for status probing, self-tests, and statistic exports.
@@ -39,21 +39,28 @@
              [State: Lost]                             [State: Restored]
                      |                                         |
                      v                                         v
-               stop_ims()                         reconnect_ims_with_backoff()
-            (Graceful slay)                                    |
-                     |                                 apply_volte_provisioning()
-                     v                                         |
-              stats_on_drop()                              start_ims()
-                                                               |
-                                                        ims_connected_pps()
-                                                               |
-                                                    +----------+----------+
-                                                    |                     |
-                                                [Success]              [Failed]
-                                                    |                     |
-                                                    v                     v
-                                           stats_on_success()    stats_on_failure()
+              stats_on_drop()                    ims_rrm still running?
+                     |                                         |
+          stop_ims() only if SIM or            +---------------+---------------+
+             data was lost                     | yes                           | no
+                                               v                               v
+                                      check_ims_health()         reconnect_ims_with_backoff()
+                                   (restarts ims_rrm if it                     |
+                                     isn't back within 60 s)       apply_volte_provisioning()
+                                               |                               |
+                                               |                           start_ims()
+                                               |                               |
+                                               |                      ims_connected_pps()
+                                               |                               |
+                                               |                    +----------+----------+
+                                               |                    |                     |
+                                               |                [Success]              [Failed]
+                                               |                    |                     |
+                                               v                    v                     v
+                                       stats_on_success()  stats_on_success()    stats_on_failure()
 ```
+
+A network drop leaves `ims_rrm` running, because it registers again by itself when LTE returns. Stopping it would make that slower: it drops its IPsec keys first, and its old socket then holds the local port, so the next `REGISTER` from the same address fails with `Address already in use` for up to about 2 minutes. `ims_rrm` doesn't retry that send.
 
 ---
 
@@ -63,11 +70,30 @@
 * **QNX Neutrino C Library:** Standard POSIX routines (`pthread`, `poll`, `spawn`).
 * **PPS Library:** `<sys/pps.h>` (`libpps.so`)
 * **Slog2 Subsystem:** `<sys/slog2.h>` (`libslog2.so`)
+* **Socket Library:** `<sys/socket.h>` (`libsocket.so`)
 
 ### Module Internal Headers
-* `sys_utils.h`: System wrappers, string manipulators, and POSIX spawn execution functions.
+* `sys_utils.h`: Addon install paths and the run directory; includes `log_utils.h`, `file_utils.h`, and `proc_utils.h`.
+* `log_utils.h`: Logging to slog2, stdout, and the installer log, and the verbose-output macro.
+* `file_utils.h`: File read, write, and append helpers and recursive directory creation.
+* `proc_utils.h`: POSIX spawn execution, process lookup by name, and graceful process termination.
 * `berry_monitor.h`: Visual indicator and UI status bar integration utilities.
-* `ims_carrier_config.h`: XML carrier profile parser and provisioning apply utilities.
+* `ims_carrier_config.h`: Resolves a SIM's `imsconfig` file and turns on its VoLTE provisioning flag.
+* `carrier_lookup.h`: Finds a SIM's carrier ID in `carrierIds.xml`.
+* `carrier_profile.h`: Builds a carrier's VoLTE profile XML from its stock config and Android APNs.
+* `ims_carrier_db.h`: Downloads Android's carrier and APN lists and generates the addon's carrier list.
+* `carrier_fetch.h`: Downloads the Android carrier and APN lists over verified HTTPS.
+* `carrier_rows.h`: Carrier list rows, read from the stock list and appended from the Android list.
+* `carrier_apns.h`: Picks each carrier's Android APNs and writes the APN table.
+* `daemon_stats.h`: Connection statistics counters and the statistics file.
+* `system_state.h`: PPS paths, LTE/SIM/data readiness checks, and SIM carrier detection.
+* `carrier_apply.h`: Publishes the carrier profile to the data service and links the carrier list.
+* `ims_control.h`: Mounts the crypto provider, starts and stops `ims_rrm`, and writes its provisioning.
+* `ims_routes.h`: Adds and clears the P-CSCF routes that `ims_rrm` cannot add itself.
+* `ims_reconnect.h`: Waits for IMS registration, reconnects with backoff, and checks IMS health.
+* `voice_flag.h`: Optional forced IMS voice bit in the radio's `network_service`.
+* `pps_monitor.h`: Background PPS monitor thread and the stop flags set by the signal handlers.
+* `self_test.h`: Built-in tests behind `--self-test`.
 
 ### Monitored PPS Paths
 
@@ -97,7 +123,7 @@ ims_manager [action] [refresh]
 | `--self-test` | *None* | Executes unit testing suite for internal PPS parsers. |
 | `--berry-check` | *None* | Inspects current IMS registration vs Berry indicator UI state. |
 | `--stats` | *None* | Outputs the formatted statistics file content from `/var/run/bb10_volte_stats.txt`. |
-| `--reset-stats` | *None* | Clears runtime statistical counters and regenerates the stats file. |
+| `--reset-stats` | *None* | Clears the counters and regenerates the stats file. If the daemon is running, sends it `SIGUSR1` so it does the reset itself. |
 | `-h, --help` | *None* | Displays execution options and usage text. |
 
 ---
@@ -118,8 +144,8 @@ kill -SIGUSR1 $(pidof ims_manager)
 ## Exported Files & Output Artifacts
 
 * `/var/run/bb10_volte_stats.txt`: Contains current session statistics including total drops, successful/failed reconnection attempts, and average recovery duration.
-* `/var/run/provider.log`: Execution logs for `devnp-volte-swcrypto.so` network driver stack mounting.
-* `/var/run/ims-start.log`: Output and error logs generated by `/radio/bin/ims_rrm`.
-* `/var/run/dca-enable.log`: Execution trace from the `dca` service provisioning command.
+* `/var/tmp/bb10-volte/provider.log`: Execution logs for `devnp-volte-swcrypto.so` network driver stack mounting.
+* `/var/tmp/bb10-volte/ims-start.log`: Output and error logs generated by `/radio/bin/ims_rrm`.
+* `/var/tmp/bb10-volte/dca-enable.log`: Execution trace from the `dca` service provisioning command.
 
 ---

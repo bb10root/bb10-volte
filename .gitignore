@@ -53,4 +53,17 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Build outputs
+/pkg/init/ims_manager
+/pkg/init/ims_manager.new
+/volte.zip
+/build/
+
+# Local notes, tester logs and release zips
+.DS_Store
+/HANDOFF-*.md
+/users-debug/
+/volte-*.zip
+re/
 tests/test_carrier_config

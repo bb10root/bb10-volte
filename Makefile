@@ -13,7 +13,11 @@ TARGET_BIN := $(PKG_DIR)/ims_manager
 TARGET_SO  := $(PKG_DIR)/devnp-volte-swcrypto.so
 
 # Source files
-SRCS_BIN  := ims_manager.c ims_carrier_config.c sys_utils.c berry_monitor.c
+SRCS_BIN  := ims_manager.c daemon_stats.c system_state.c carrier_apply.c ims_control.c ims_routes.c \
+             ims_reconnect.c voice_flag.c pps_monitor.c self_test.c ims_patch.c \
+             ims_carrier_config.c carrier_lookup.c carrier_profile.c \
+             ims_carrier_db.c carrier_rows.c carrier_apns.c carrier_fetch.c \
+             sys_utils.c log_utils.c file_utils.c proc_utils.c berry_monitor.c
 SRCS_BIN  := $(addprefix $(SRC_DIR)/, $(SRCS_BIN))
 SRCS_SO   := $(SRC_DIR)/devnp-volte-swcrypto.c
 
@@ -23,8 +27,8 @@ OBJS_SO   := $(SRCS_SO:.c=.o)
 DEPS      := $(OBJS_BIN:.o=.d) $(OBJS_SO:.o=.d)
 
 # Base CFlags and LDFLags
-CFLAGS    := -std=gnu99 -Isrc/include -MMD -MP
-LDFLAGS   := -lxml2 -lpps -lslog2
+CFLAGS    := -std=gnu99 -MMD -MP
+LDFLAGS   := -lxml2 -lcurl -lpps -lslog2 -lsocket -lz
 
 # Build mode toggle: DEBUG=1 vs Release (default)
 ifeq ($(DEBUG), 1)
@@ -83,10 +87,36 @@ $(TARGET_SO): $(OBJS_SO) | $(PKG_DIR)
 -include $(DEPS)
 
 # Pack everything inside pkg/ directory into archive
+# The second copy is what an update installs while the old daemon is running; start.sh moves it in.
 package: $(TARGET_BIN) $(TARGET_SO)
+	cp $(TARGET_BIN) $(TARGET_BIN).new
 	@echo "[*] Creating archive $(ZIP_NAME)..."
 	@cd pkg && $(ZIP) -r -q ../$(ZIP_NAME) ./*
 	@echo "[+] All done! Package created: $(ZIP_NAME)"
+
+# Runs on the build host, not the phone: the carrier code has no QNX dependencies
+test:
+	@mkdir -p build
+	cc -std=gnu99 -Isrc $$(xml2-config --cflags) tests/test_carrier.c \
+		src/ims_carrier_config.c src/carrier_lookup.c src/carrier_profile.c \
+		src/ims_carrier_db.c src/carrier_rows.c src/carrier_apns.c src/carrier_fetch.c \
+		$$(xml2-config --libs) -lcurl -o build/test_carrier
+	./build/test_carrier
+	cc -std=gnu99 -Isrc tests/test_carrier_reload.c -o build/test_carrier_reload
+	./build/test_carrier_reload
+	cc -std=gnu99 -Isrc tests/test_radio_reset.c -o build/test_radio_reset
+	./build/test_radio_reset
+	cc -std=gnu99 -Isrc tests/test_stop_sender.c -o build/test_stop_sender
+	./build/test_stop_sender
+	cc -std=gnu99 -Isrc tests/test_routes.c -o build/test_routes
+	./build/test_routes
+	cc -std=gnu99 -Isrc tests/test_stop_signal.c -lpthread -o build/test_stop_signal
+	./build/test_stop_signal
+	cc -std=gnu99 -Isrc tests/test_ims_patch.c -lz -o build/test_ims_patch
+	./build/test_ims_patch
+	cc -std=gnu99 -Isrc -Itests/qnx tests/test_sim_carrier.c -o build/test_sim_carrier
+	./build/test_sim_carrier
+	sh tests/test_start.sh
 
 # Clean object files, dependency files, binaries, and archive
 clean:

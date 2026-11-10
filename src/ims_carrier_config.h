@@ -13,8 +13,7 @@ extern "C" {
 #endif
 
 /**
- * Parses carrierIds.xml and returns the carrier_id for the given MCC and MNC.
- * Uses libxml2 SAX API for high performance and low memory footprint.
+ * Resolves the path to the imsconfig_<carrier_id>.xml file for the given SIM.
  *
  * @param mcc Mobile Country Code (e.g., "255")
  * @param mnc Mobile Network Code (e.g., "01")
@@ -61,7 +60,7 @@ int ims_ir92_applied(const char *actual, const char *expected);
  * @param max_len Maximum size of the out_path buffer
  * @return 0 on success, -1 on error or if the file does not exist
  */
-int ims_resolve_config_path(const char *mcc, const char *mnc, char *out_path, size_t max_len);
+int ims_resolve_config_path(const char *mcc, const char *mnc, const char *gid1, char *out_path, size_t max_len);
 
 /**
  * Sets the value of the <AllowVoLteProvisioning> node to "enabled" in the specified XML file.
