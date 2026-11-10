@@ -66,3 +66,4 @@ dkms.conf
 /users-debug/
 /volte-*.zip
 re/
+tests/test_carrier_config

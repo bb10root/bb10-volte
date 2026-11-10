@@ -43,6 +43,16 @@ endif
 
 all: package
 
+# Host-side unit tests for the portable helpers (native compiler + libxml2)
+HOST_CC     ?= cc
+HOST_XML2   ?= $(shell xml2-config --cflags --libs 2>/dev/null || echo -I/usr/include/libxml2 -lxml2)
+TEST_BIN    := tests/test_carrier_config
+
+test:
+	$(HOST_CC) -std=gnu99 -Wall -Wextra -Isrc tests/test_carrier_config.c src/ims_carrier_config.c \
+		$(HOST_XML2) -o $(TEST_BIN)
+	./$(TEST_BIN)
+
 # Helper target to invoke build with DEBUG=1
 debug:
 	@$(MAKE) DEBUG=1
@@ -111,7 +121,7 @@ test:
 # Clean object files, dependency files, binaries, and archive
 clean:
 	@echo "[*] Cleaning build artifacts..."
-	rm -f $(OBJS_BIN) $(OBJS_SO) $(DEPS) $(TARGET_BIN) $(TARGET_BIN).new $(TARGET_SO) $(ZIP_NAME)
+	rm -f $(OBJS_BIN) $(OBJS_SO) $(DEPS) $(TARGET_BIN) $(TARGET_SO) $(ZIP_NAME) $(TEST_BIN)
 
 help:
 	@echo "Usage:"
@@ -119,5 +129,5 @@ help:
 	@echo "  make DEBUG=1       - Build debug binaries (-g -O0, no strip)"
 	@echo "  make debug         - Alias for 'make DEBUG=1'"
 	@echo "  make -j4           - Parallel build using 4 core workers"
-	@echo "  make test          - Build and run the carrier tests on this machine"
 	@echo "  make clean         - Remove object files, generated dependencies, and archive"
+	@echo "  make test          - Build and run host-side unit tests (native cc + libxml2)"
