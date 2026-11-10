@@ -48,7 +48,7 @@ cat /var/log/installer.log 2>&1 |
 
 save /var/run/bb10_volte_stats.txt stats.txt
 
-for name in provider ims-start dca-enable route carrier-link; do
+for name in provider ims-start dca-enable route; do
     save "/var/tmp/bb10-volte/$name.log" "$name.log"
 done
 

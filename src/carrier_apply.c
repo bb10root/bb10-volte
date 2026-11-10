@@ -5,11 +5,13 @@
 #include "ims_carrier_db.h"
 #include "system_state.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/pathmgr.h>
 #include <sys/stat.h>
 
 #define CARRIER_DB_MAX_AGE_SECONDS (30 * 24 * 3600)
@@ -89,14 +91,11 @@ static int path_linked_to(const char *path, const char *target)
 /* A path manager link doesn't survive a reboot, so every start makes it again. */
 static int link_path(char *target, char *path)
 {
-    char log_file[512];
-
     if (path_linked_to(path, target))
         return 1;
 
-    snprintf(log_file, sizeof(log_file), "%s/carrier-link.log", RUN_PATH);
-    char *args[] = {"/bin/ln", "-sP", target, path, NULL};
-    run_cmd_spawn(args, log_file);
+    if (pathmgr_symlink(target, path) != 0)
+        LOG_VERBOSE("pathmgr_symlink %s -> %s failed: %s", path, target, strerror(errno));
     return path_linked_to(path, target);
 }
 

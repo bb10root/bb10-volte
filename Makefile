@@ -92,7 +92,7 @@ test:
 		src/ims_carrier_db.c src/carrier_rows.c src/carrier_apns.c src/carrier_fetch.c \
 		$$(xml2-config --libs) -lcurl -o build/test_carrier
 	./build/test_carrier
-	cc -std=gnu99 -Isrc tests/test_carrier_reload.c -o build/test_carrier_reload
+	cc -std=gnu99 -Isrc -Itests/qnx tests/test_carrier_reload.c -o build/test_carrier_reload
 	./build/test_carrier_reload
 	cc -std=gnu99 -Isrc tests/test_radio_reset.c -o build/test_radio_reset
 	./build/test_radio_reset
@@ -102,7 +102,7 @@ test:
 	./build/test_routes
 	cc -std=gnu99 -Isrc tests/test_stop_signal.c -lpthread -o build/test_stop_signal
 	./build/test_stop_signal
-	cc -std=gnu99 -Isrc tests/test_ims_patch.c -lz -o build/test_ims_patch
+	cc -std=gnu99 -Isrc -Itests/qnx tests/test_ims_patch.c -o build/test_ims_patch
 	./build/test_ims_patch
 	cc -std=gnu99 -Isrc -Itests/qnx tests/test_sim_carrier.c -o build/test_sim_carrier
 	./build/test_sim_carrier

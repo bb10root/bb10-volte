@@ -92,10 +92,10 @@ int pps_check_attribute_contains(const char *pps_path, const char *attr_name, co
     return strstr(g_signature, expected_val) != NULL;
 }
 
-int run_cmd_spawn(char *const argv[], const char *log_path)
+int pathmgr_symlink(const char *path, const char *symlink)
 {
-    (void)log_path;
-    snprintf(g_link, sizeof(g_link), "%s", argv[2]);
+    (void)symlink;
+    snprintf(g_link, sizeof(g_link), "%s", path);
     return 0;
 }
 
