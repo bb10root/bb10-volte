@@ -264,6 +264,37 @@ int main(void)
     assert(strstr(internet, "<AppModifiable>") < strstr(internet, "<LTEAttachService>"));
     assert(!strstr(strstr(vod, "<Name>ims</Name>") + 1, "<Name>ims</Name>"));
 
+    /* As Telekom DE ships: an attach service with no APN, which lands on ims. Our ims takes the attach. */
+    write_text("config/80.xml", CONFIG_HEAD
+        "<ServiceConfiguration><Name>lte_admin</Name><AlwaysOn>true</AlwaysOn><LTEAttachService>true</LTEAttachService>"
+        "<RadioAccessTechnology><APN/></RadioAccessTechnology></ServiceConfiguration>"
+        INTERNET_SERVICE
+        "<ServiceConfigurationAlias><Name>mms</Name><Reference>internet</Reference></ServiceConfigurationAlias>"
+        CONFIG_TAIL);
+    assert(ims_build_carrier_xml(80, "config", "apns.tsv", "admin.xml") == 0);
+    const char *admin = read_text("admin.xml");
+    assert(!strstr(admin, "<ServiceConfiguration><Name>lte_admin</Name>"));
+    assert(strstr(admin, "<Name>lte_admin</Name>\n      <Reference>ims</Reference>"));
+    const char *ims = strstr(admin, "<ServiceConfiguration>\n      <Name>ims</Name>");
+    const char *ims_end = ims ? strstr(ims, "</ServiceConfiguration>") : NULL;
+    const char *attach = strstr(admin, "<LTEAttachService>");
+    assert(ims && attach > ims && attach < ims_end);
+    assert(!strstr(attach + 1, "<LTEAttachService>"));
+    assert(strstr(ims, "<AlwaysOn>true</AlwaysOn>") < ims_end);
+    assert(strstr(ims, "<AlwaysOn>") < attach);
+    assert(!strstr(admin, "<Connectivity>"));
+    assert(strstr(ims, "<RequestPCSCFViaPCO>true</RequestPCSCFViaPCO>") < ims_end);
+
+    /* An lte_admin with its own APN is the carrier's choice and stays. */
+    write_text("config/81.xml", CONFIG_HEAD
+        "<ServiceConfiguration><Name>lte_admin</Name><LTEAttachService>true</LTEAttachService>"
+        "<RadioAccessTechnology><APN>attach.net</APN></RadioAccessTechnology></ServiceConfiguration>"
+        INTERNET_SERVICE CONFIG_TAIL);
+    assert(ims_build_carrier_xml(81, "config", "apns.tsv", "admin2.xml") == 0);
+    admin = read_text("admin2.xml");
+    assert(strstr(admin, "<APN>attach.net</APN>"));
+    assert(!strstr(strstr(admin, "<Name>internet</Name>"), "<LTEAttachService>"));
+
     /* The Android APN replaces the stock one, and the stock login leaves with it. */
     write_text("config/60.xml", CONFIG_HEAD
         "<ServiceConfiguration><Name>internet</Name><RadioAccessTechnology><APN>old.net</APN>"

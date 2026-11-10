@@ -274,6 +274,52 @@ static void ensure_ims_service(xmlDocPtr doc, xmlNodePtr data, xmlDocPtr templat
         add_setting(internet, "LTEAttachService", "AlwaysOn", "Description");
 }
 
+static int has_blank_apn(xmlNodePtr service)
+{
+    xmlNodePtr rat = find_child(service, "RadioAccessTechnology");
+    xmlNodePtr apn = rat ? find_child(rat, "APN") : NULL;
+    xmlChar *text = apn ? xmlNodeGetContent(apn) : NULL;
+    int blank = !text || text[0] == '\0';
+    xmlFree(text);
+    return blank;
+}
+
+/*
+ * A stock attach service with no APN lets the network choose, and Telekom DE chooses ims. Our ims
+ * service then shares that bearer, which was opened without asking for a P-CSCF, so IMS never
+ * registers. Attaching on internet instead lost Telekom service entirely (2.30), so ims takes the
+ * attach role: the attach bearer then asks for a P-CSCF. It keeps lte_admin's terms, always on
+ * and never gated on the data switch, since dropping the attach bearer drops LTE.
+ */
+static void attach_on_ims(xmlDocPtr doc, xmlNodePtr data)
+{
+    xmlNodePtr admin = find_named(data, "ServiceConfiguration", "lte_admin");
+    xmlNodePtr ims = find_named(data, "ServiceConfiguration", "ims");
+    if (!admin || !ims || !find_child(admin, "LTEAttachService") || !has_blank_apn(admin))
+        return;
+
+    xmlNodePtr alias = xmlNewNode(data->ns, (const xmlChar *)"ServiceConfigurationAlias");
+    set_text(doc, xmlNewChild(alias, data->ns, (const xmlChar *)"Name", NULL), "lte_admin");
+    set_text(doc, xmlNewChild(alias, data->ns, (const xmlChar *)"Reference", NULL), "ims");
+    xmlNodePtr first_alias = find_child(data, "ServiceConfigurationAlias");
+    if (first_alias)
+        xmlAddPrevSibling(first_alias, alias);
+    else
+        xmlAddChild(data, alias);
+
+    xmlUnlinkNode(admin);
+    xmlFreeNode(admin);
+
+    remove_child(ims, "Connectivity");
+    xmlNodePtr always_on = find_child(ims, "AlwaysOn");
+    if (always_on)
+        set_text(doc, always_on, "true");
+    else
+        add_setting(ims, "AlwaysOn", "Description", "Name");
+    if (!find_child(ims, "LTEAttachService"))
+        add_setting(ims, "LTEAttachService", "AlwaysOn", "Description");
+}
+
 static char *next_tsv_field(char *field, char *out, size_t size)
 {
     if (!field)
@@ -413,6 +459,7 @@ int ims_build_carrier_xml(int carrier_id, const char *config_dir, const char *ap
             apply_carrier_apns(doc, data, templates, &apns);
 
         ensure_ims_service(doc, data, templates);
+        attach_on_ims(doc, data);
         make_internet_editable(doc, data);
 
         status = save_profile(doc, out_path);
