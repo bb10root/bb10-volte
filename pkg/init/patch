@@ -1,0 +1,12 @@
+# ims_rrm byte patches, applied by /var/rootdata/installer at install time.
+# The daemon (src/ims_patch.c) checks and reapplies the same bytes before each ims_rrm start.
+/radio/bin/ims_rrm
+# SDP parser: skip an e= line it can't parse instead of failing the call (Telus)
+0x2086AE: 0x68 0x0D
+0x2086AF: 0xB9 0xE0
+# Caller ID: always use the user part, not user@host (Viettel national numbers)
+0xD9FFA: 0x08 0x00
+0xD9FFB: 0xD0 0xBF
+# AMR-WB and AMR CopyRemoteModeSet default 0 -> 1 (Telus 406)
+0x24C6D8: 0x00 0x01
+0x24C700: 0x00 0x01
