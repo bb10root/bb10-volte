@@ -12,7 +12,7 @@
 #define STOCK_PATH "/radio/bin/ims_rrm"
 #define STOCK_SIZE 4787852
 #define STOCK_CRC 0xe8c52819UL   /* crc32 of the whole stock file */
-#define PATCHED_CRC 0xfc4cb318UL /* crc32 after all patches */
+#define PATCHED_CRC 0x67719fe8UL /* crc32 after all patches */
 #define PATH_BUF (512 + 16)
 
 typedef struct
@@ -38,6 +38,13 @@ static const patch_t patches[] = {
        `movs r1, #0` becomes `movs r1, #1`: the default for AMR-WB, then AMR. */
     {0x24c6d8, {0x00, 0x21}, {0x01, 0x21}},
     {0x24c700, {0x00, 0x21}, {0x01, 0x21}},
+    /* TEST: outgoing calls went to sip:<digits>@ims.mncXXX.mccYYY.3gppnetwork.org;user=phone,
+       the domain derived from the IMSI, and EE and Telekom DE answer 503 "(1:223)"; their
+       identities are in their own domains. The dial pattern's literal (pc-relative, at c28be)
+       now points at the stock string "tel:<formatted-digits>" (0x3743df) that the built-in
+       operator schemes use, so the Request-URI carries no domain. */
+    {0xc2bb8, {0xa3, 0x71}, {0x19, 0x1b}},
+    {0xc2bba, {0x29, 0x00}, {0x2b, 0x00}},
 };
 
 #define PATCH_COUNT (sizeof(patches) / sizeof(patches[0]))
