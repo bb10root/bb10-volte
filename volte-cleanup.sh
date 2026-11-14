@@ -30,8 +30,11 @@ case $MODE in
     *) echo "Unknown option: $MODE. Use apply, or nothing to only look."; exit 1 ;;
 esac
 
-if [ ! -w /var/addons ]; then
-    echo "Cannot write to /var/addons: run this as root."
+# /var/addons is missing until the first addon is installed.
+ROOT_CHECK=/var/addons
+[ -e "$ROOT_CHECK" ] || ROOT_CHECK=/var/
+if [ ! -w "$ROOT_CHECK" ]; then
+    echo "Cannot write to $ROOT_CHECK: run this as root."
     exit 1
 fi
 

@@ -147,6 +147,12 @@ check 'rootdata backed up' '[ -f "$copy$R/var/rootdata/volte/data-profile.xml" ]
 run; code=$?
 check 'second check is clean' '[ "$code" = 0 ] && grep -q "^none" "$R/out.txt" && ! grep -q "would" "$R/out.txt"'
 
+# A freshly rooted phone has no /var/addons until the first addon is installed.
+make_phone
+rm -rf "$R/var/addons"
+run
+check 'no addons folder still runs' '! grep -q "run this as root" "$R/out.txt" && grep -q "Nothing was changed." "$R/out.txt"'
+
 # The third-party addon, with its service installed.
 make_vn_phone() {
     make_phone
