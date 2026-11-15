@@ -191,6 +191,44 @@ static void test_auto(void)
     assert(strcmp(volte_call_mode(&c, imsi), "sip-learned") == 0);
 }
 
+static void test_apn(void)
+{
+    const char *xml =
+        "<CarrierConfiguration>\n"
+        "<ServiceConfiguration><Name>ims_admin</Name><RadioAccessTechnology><APN>admin.apn</APN>"
+        "</RadioAccessTechnology></ServiceConfiguration>\n"
+        "<ServiceConfiguration><Name>internet</Name><NetworkInterfaceConfiguration><Type>IPv4v6</Type>"
+        "</NetworkInterfaceConfiguration><RadioAccessTechnology><APN>internet.v6.telekom</APN>"
+        "</RadioAccessTechnology></ServiceConfiguration>\n"
+        "<ServiceConfiguration><Name>ims</Name><NetworkInterfaceConfiguration><Type>IPv6</Type>"
+        "</NetworkInterfaceConfiguration><RadioAccessTechnology><APN>ims</APN></RadioAccessTechnology>"
+        "<Enabled>true</Enabled></ServiceConfiguration>\n"
+        "<ServiceConfiguration><Name>wap</Name><RadioAccessTechnology><APN></APN></RadioAccessTechnology>"
+        "</ServiceConfiguration>\n"
+        "<ServiceConfiguration><Name>mms</Name><RadioAccessTechnology><APN/></RadioAccessTechnology>"
+        "</ServiceConfiguration>\n"
+        "<ServiceConfiguration><Name>tether</Name><RadioAccessTechnology><APN>\n  tether.apn \t</APN>"
+        "</RadioAccessTechnology></ServiceConfiguration>\n"
+        "</CarrierConfiguration>\n";
+    char out[64];
+
+    assert(volte_settings_parse_apn(xml, "internet", out, sizeof(out)) == 1);
+    assert(strcmp(out, "internet.v6.telekom") == 0);
+    /* ims_admin comes first: only the exact name counts. */
+    assert(volte_settings_parse_apn(xml, "ims", out, sizeof(out)) == 1);
+    assert(strcmp(out, "ims") == 0);
+    assert(volte_settings_parse_apn(xml, "tether", out, sizeof(out)) == 1);
+    assert(strcmp(out, "tether.apn") == 0);
+
+    /* mms has <APN/>; the next service's (tether's) APN must not leak into it. */
+    assert(volte_settings_parse_apn(xml, "mms", out, sizeof(out)) == 0 && out[0] == '\0');
+    assert(volte_settings_parse_apn(xml, "wap", out, sizeof(out)) == 0 && out[0] == '\0');
+    snprintf(out, sizeof(out), "stale");
+    assert(volte_settings_parse_apn(xml, "dun", out, sizeof(out)) == 0 && out[0] == '\0');
+    assert(volte_settings_parse_apn(xml, "internet", out, 8) == 0 && out[0] == '\0');
+    assert(volte_settings_parse_apn(NULL, "ims", out, sizeof(out)) == 0 && out[0] == '\0');
+}
+
 static void test_zip(void)
 {
     char dir[] = "/tmp/volte-zip-XXXXXX";
@@ -247,6 +285,7 @@ int main(void)
     test_last_call();
     test_call_id();
     test_auto();
+    test_apn();
     test_zip();
     printf("test_volte_settings: OK\n");
     return 0;

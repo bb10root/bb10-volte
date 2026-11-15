@@ -90,9 +90,10 @@ This is still experimental:
 By default the daemon picks the dial format by itself: it starts with `tel:` and, when the
 network refuses an outgoing call with 503, moves on to `sip:@operator domain` (only when the
 network's identity domain differs from the SIM's) and then `sip:@SIM domain`. A connected call
-confirms the format. The Cascades app shows that status, lets you pick a format by hand or go
-back to Automatic, lists the domains and the last call result, and has **Debug report** in its
-top pull-down menu. It is a separate project:
+confirms the format. The Cascades app opens on a status page (mobile data, IMS, the daemon and
+`ims_rrm`, MCC/MNC, the APNs). Its other pages are in the menu on the left: the call format
+(pick one by hand or go back to Automatic), install or clean up, details (the domains, the last
+call result and **Debug report**) and advanced. It is a separate project:
 
 **`../volte-manager`** (package `com.zsavajji.voltedomain`).
 

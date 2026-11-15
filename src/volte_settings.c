@@ -1,5 +1,8 @@
 #include "volte_settings.h"
 #include "volte_settings_parse.h"
+#include "berry_monitor.h"
+#include "carrier_profile.h"
+#include "proc_utils.h"
 #include "ims_control.h"
 #include "ims_carrier_config.h"
 #include "carrier_lookup.h"
@@ -205,10 +208,30 @@ static void load_auto(const char *tok)
 
 /* --- status file --- */
 
+/* APNs of the ims and internet services in the carrier config cellular-control reads (a link to
+   the addon's profile, or the stock file). Both are empty when it cannot be read. */
+static void read_apns(char *ims, char *internet, size_t len)
+{
+    char path[128];
+    char *xml;
+
+    ims[0] = internet[0] = '\0';
+    if (g_carrier_id <= 0 || !(xml = malloc(64 * 1024)))
+        return;
+    snprintf(path, sizeof(path), CARRIER_CONFIG_DIR "/%d.xml", g_carrier_id);
+    if (read_file(path, xml, 64 * 1024) >= 0)
+    {
+        volte_settings_parse_apn(xml, "ims", ims, len);
+        volte_settings_parse_apn(xml, "internet", internet, len);
+    }
+    free(xml);
+}
+
 static void write_status(const char *state, const char *message)
 {
-    char buf[2048];
+    char buf[4096];
     char knobs[128];
+    char ims_apn[128], internet_apn[128];
     size_t i, used = 0;
 
     if (message)
@@ -232,6 +255,7 @@ static void write_status(const char *state, const char *message)
         }
         used += (size_t)n;
     }
+    read_apns(ims_apn, internet_apn, sizeof(ims_apn));
     snprintf(buf, sizeof(buf),
              "request=%s\n"
              "carrier=%d\n"
@@ -249,11 +273,22 @@ static void write_status(const char *state, const char *message)
              "auto_note=%s\n"
              "knobs=%s\n"
              "carrier_list=%s\n"
+             "mobile_data=%s\n"
+             "ims=%s\n"
+             "ims_rrm=%s\n"
+             "mcc=%s\n"
+             "mnc=%s\n"
+             "ims_apn=%s\n"
+             "internet_apn=%s\n"
              "updated=%ld\n",
              g_last_request, g_carrier_id, g_mode, state, g_imsi, g_learned,
              g_call.result, g_call.uri, g_debug_state, g_debug_file, g_message,
              g_selection, g_auto_state, g_auto_note, knobs,
-             carrier_db_present() ? "ok" : "missing", (long)time(NULL));
+             carrier_db_present() ? "ok" : "missing",
+             pps_check_attribute_contains(PPS_DATA_PATH, "data_service_mode", "ON") ? "on" : "off",
+             ims_connected_pps() ? "connected" : "disconnected",
+             find_pid_by_name("ims_rrm", 0) > 0 ? "running" : "stopped",
+             g_mcc, g_mnc, ims_apn, internet_apn, (long)time(NULL));
     write_file(STATUS_PATH, buf, 0666);
 }
 

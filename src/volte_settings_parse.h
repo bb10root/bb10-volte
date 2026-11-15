@@ -49,4 +49,8 @@ int volte_call_refused(const volte_call_t *call);
    imsi_domain, "sip-learned" for any other domain, NULL when unknown/empty. */
 const char *volte_call_mode(const volte_call_t *call, const char *imsi_domain);
 
+/* APN of one service in a carrier config XML: the <APN> text inside the <ServiceConfiguration>
+   whose <Name> is exactly service. out is empty and 0 is returned when there is none. */
+int volte_settings_parse_apn(const char *xml, const char *service, char *out, size_t out_len);
+
 #endif /* VOLTE_SETTINGS_PARSE_H */

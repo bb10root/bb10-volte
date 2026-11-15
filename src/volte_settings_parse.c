@@ -1,5 +1,6 @@
 #include "volte_settings_parse.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -293,4 +294,45 @@ const char *volte_call_mode(const volte_call_t *call, const char *imsi_domain)
     if (imsi_domain && strcmp(call->uri, imsi_domain) == 0)
         return "sip-imsi";
     return "sip-learned";
+}
+
+int volte_settings_parse_apn(const char *xml, const char *service, char *out, size_t out_len)
+{
+    char name[96];
+    const char *p, *end, *apn, *stop;
+    int n;
+    size_t len;
+
+    if (!out || out_len == 0)
+        return 0;
+    out[0] = '\0';
+    if (!xml || !service)
+        return 0;
+    n = snprintf(name, sizeof(name), "<Name>%s</Name>", service);
+    if (n < 0 || (size_t)n >= sizeof(name) || !(p = strstr(xml, name)))
+        return 0;
+    p += n;
+
+    /* Only this service's block: a service without an APN must not take the next one's. */
+    end = strstr(p, "</ServiceConfiguration>");
+    if (!end)
+        end = p + strlen(p);
+    apn = strstr(p, "<APN>");
+    if (!apn || apn >= end)
+        return 0;
+    apn += 5;
+    stop = strstr(apn, "</APN>");
+    if (!stop)
+        return 0;
+
+    while (apn < stop && isspace((unsigned char)*apn))
+        apn++;
+    while (stop > apn && isspace((unsigned char)stop[-1]))
+        stop--;
+    len = (size_t)(stop - apn);
+    if (len == 0 || len >= out_len || memchr(apn, '\n', len) || memchr(apn, '<', len))
+        return 0;
+    memcpy(out, apn, len);
+    out[len] = '\0';
+    return 1;
 }
