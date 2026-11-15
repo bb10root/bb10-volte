@@ -6,6 +6,10 @@
 #include <signal.h>
 #include <errno.h>
 #include <getopt.h>
+#include <fcntl.h>
+#include <devctl.h>
+#include <spawn.h>
+#include <sys/procfs.h>
 
 #include "sys_utils.h"
 #include "berry_monitor.h"
@@ -93,10 +97,42 @@ static void reset_stats_cli(void)
     printf("[BBE] Statistics reset successfully.\n");
 }
 
+/* The system ends every process carrying an app's id when that app exits, and a daemon started
+   from an app's installer inherits it. Appid 1 (boot) or our own pid is fine; anything else,
+   start over as a new application. Only for the daemon: a one-shot command must keep its caller. */
+static void become_own_app(char *argv[])
+{
+    debug_process_t info;
+    int pfd = open("/proc/self/as", O_RDONLY);
+    int got = pfd >= 0 && devctl(pfd, DCMD_PROC_INFO, &info, sizeof info, NULL) == EOK;
+    if (pfd >= 0)
+        close(pfd);
+    if (!got || info.appid == 1 || info.appid == (unsigned)getpid())
+        return;
+
+    posix_spawnattr_t attr;
+    pid_t child;
+    if (posix_spawnattr_init(&attr) != 0)
+        return;
+    int rc = posix_spawnattr_setxflags(&attr, POSIX_SPAWN_NEWAPP | POSIX_SPAWN_SETSID | POSIX_SPAWN_NOZOMBIE);
+    if (rc == 0)
+        rc = posix_spawn(&child, argv[0], NULL, &attr, argv, environ);
+    posix_spawnattr_destroy(&attr);
+    if (rc == 0)
+        _exit(0);
+    log_msg("[BBE] NEWAPP_FAILED: %s", strerror(rc));
+}
+
 /* --- Main Entry Point --- */
 
 int main(int argc, char *argv[])
 {
+    /* Whoever started us may have leaked its descriptors (an app's navigator, GPU and screen
+       connections did): the system ends every process holding them when that app exits, and
+       ims_rrm would inherit them from us too. Keep only stdin, stdout and stderr. */
+    for (long fd = 3, max = sysconf(_SC_OPEN_MAX); fd < max; fd++)
+        close((int)fd);
+
     init_slog2_logging("bb10_volte");
 
     const char *action = "check";
@@ -210,6 +246,7 @@ int main(int argc, char *argv[])
     {
         bbe_exit_fail("ACTION_INVALID", 1);
     }
+    become_own_app(argv);
 
     link_carrier_db();
 

@@ -56,4 +56,8 @@ fi
 # Trust is on the inode and a moved file doesn't keep it, so trust it on every start, boot included.
 # The daemon does the same for its ims_rrm copy.
 /proc/boot/pathtrust "!$BIN"
-on -d "$BIN" -a enable $REFRESH
+# Detached from whoever ran this script (boot, a terminal, the VoLTE Domain app): -t gives a new
+# session with pid 1 as parent and no stdio of theirs, so the daemon never writes to a pipe whose
+# reader has gone. The daemon itself closes any other descriptors it inherited and, when started
+# from an app (the VoLTE Domain installer), takes a new appid, so closing that app can't end it.
+on -d -t /dev/null "$BIN" -a enable $REFRESH
